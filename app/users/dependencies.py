@@ -1,10 +1,14 @@
-from fastapi import Header, status, HTTPException
+from fastapi import Header, status, HTTPException, Depends
 from app.core.security import decode_access_token
-from app.data.users import users
+from sqlalchemy.orm import Session
+from app.db.dependencies import get_db
+from app.db.models import User
 
 #vaidate current user's session and turn into a real valid user obj
 
-def get_current_user(authorization: str | None = Header(default=None)) -> dict:
+def get_current_user(authorization: str | None = Header(default=None),
+                     db: Session = Depends(get_db),
+                     ) -> User:
     if not authorization:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -22,7 +26,7 @@ def get_current_user(authorization: str | None = Header(default=None)) -> dict:
     payload = decode_access_token(token)
     user_id = int(payload["sub"])
 
-    user = next((user for user in users if user["id"] == user_id), None)
+    user = db.query(User).filter(User.id == user_id).first()
 
     if not user:
         raise HTTPException(
