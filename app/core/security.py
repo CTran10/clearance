@@ -1,0 +1,47 @@
+from passlib.context import CryptContext
+import os
+import time
+from jose import jwt, JWTError
+from fastapi import HTTPException, status
+
+
+ACCESS_TOKEN_EXPIRE_SECONDS = int(os.getenv("ACCESS_TOKEN_EXPIRE_SECONDS", "1800"))
+SECRET_KEY = os.getenv("SECRET_KEY", "dev-only-change-me")
+ALGORITHM = "HS256" #common, supported, fast, secure enough for a simple app, but trades off hash strengths and depends on secret key quality
+# spent way too long thinking HS256 vs RS256 was about how strong the hash is lol.
+# turns out HS = one shared secret, RS = public/private key pair. we're tiny so shared secret is fine for now
+
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+# wait why do i need a whole "context" just to hash a password?? apparently bcrypt salts
+# for you automatically so you don't store the salt yourself. neat, one less thing to mess up
+
+# input user provided password and use .hash from cryptcontext to hash the password
+def hash_password(password: str) -> str:
+    return pwd_context.hash(password)
+
+#compareds user input against stored pw hash
+def verify_password(plain_password: str, password_hash:str) -> bool:
+    return pwd_context.verify(plain_password,password_hash)
+
+# generate auth token
+def create_access_token(user_id: int) -> str:
+    now = int(time.time())
+
+    payload = {
+        "sub": str(user_id),  # "sub" = subject. confusingly NOT something you subscribe to. it's just "who is this"
+        "iat": now,           # issued-at. learned the hard way these are unix seconds not millis (my tokens were "valid" til the year 56000)
+        "exp": now + ACCESS_TOKEN_EXPIRE_SECONDS,
+    }
+
+    return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
+
+#decodes token using env secret key and alg type
+def decode_access_token(token: str) -> dict:
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        return payload
+    except JWTError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid access token"
+        )
