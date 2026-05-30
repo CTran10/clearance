@@ -1,12 +1,17 @@
 from fastapi import APIRouter, HTTPException, status, Depends
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 
 from app.db.dependencies import get_db
 from app.db.models import User
 
-# TODO: Replace wildcard imports with explicit imports 
-from app.auth.schemas import *
-from app.core.security import *
+from app.auth.schemas import (
+    LoginRequest,
+    LoginResponse,
+    RegisterRequest,
+    RegisterResponse,
+)
+from app.core.security import create_access_token, hash_password, verify_password
 
 #creates a mini route group, so we]an attach related endpoints to a router instead of attaching every endpoint to main
 router = APIRouter(prefix="/auth", tags = ["auth"])
@@ -30,7 +35,17 @@ def register(payload: RegisterRequest, db: Session = Depends(get_db)):
        password_hash=hash_password(payload.password),
    )
     db.add(user)
-    db.commit()
+    # plot twist: i ALREADY check if the email exists up above, so why catch this here??
+    # bc two people can register the same email at the literal same millisecond and both pass the check.
+    # the db's unique constraint is the only real referee. the check above is just for nice errors most of the time
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status_code = status.HTTP_409_CONFLICT,
+            detail = "Email is already registered",
+        )
     db.refresh(user)
     return {
         "message": "User Registered",

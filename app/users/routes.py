@@ -1,6 +1,5 @@
 from fastapi import APIRouter, Depends
-# TODO: Replace wildcard imports with explicit imports 
-from app.auth.schemas import *
+from app.auth.schemas import MeResponse
 from app.users.dependencies import get_current_user
 from app.db.models import User
 
