@@ -1,7 +1,8 @@
-from fastapi import APIRouter, HTTPException, status, Depends
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 
+from app.audit.service import create_audit_event
 from app.db.dependencies import get_db
 from app.db.models import User
 
@@ -20,7 +21,11 @@ router = APIRouter(prefix="/auth", tags = ["auth"])
         status_code=status.HTTP_201_CREATED, #successful response status code
         response_model=RegisterResponse, #dictates exact response schema 
         )
-def register(payload: RegisterRequest, db: Session = Depends(get_db)):
+def register(
+    payload: RegisterRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
     #Check if user exists
     #fixed O(n) lookup using unique key in db 
     existing_user = db.query(User).filter(User.email == payload.email).first()
@@ -36,6 +41,15 @@ def register(payload: RegisterRequest, db: Session = Depends(get_db)):
    )
     db.add(user)
     try:
+        db.flush()
+        create_audit_event(
+            db,
+            action="REGISTERED_USER",
+            entity_type="user",
+            entity_id=user.id,
+            user_id=user.id,
+            request_id=getattr(request.state, "request_id", None),
+        )
         db.commit()
     except IntegrityError:
         db.rollback()
@@ -55,7 +69,11 @@ def register(payload: RegisterRequest, db: Session = Depends(get_db)):
 
 #login 
 @router.post("/login", response_model=LoginResponse)
-def login(payload: LoginRequest, db: Session = Depends(get_db)):
+def login(
+    payload: LoginRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
     # Look up the user and reject invalid credentials with a generic 401.
     user = db.query(User).filter(User.email == payload.email).first()
     if not user:
@@ -70,6 +88,15 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)):
         )
     # Create jwt token
     access_token = create_access_token(user.id)
+    create_audit_event(
+        db,
+        action="LOGGED_IN",
+        entity_type="user",
+        entity_id=user.id,
+        user_id=user.id,
+        request_id=getattr(request.state, "request_id", None),
+    )
+    db.commit()
     
     return {
         "message": "Login Successful",
