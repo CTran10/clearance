@@ -17,7 +17,7 @@ The goal is not just to make a CRUD app. The goal is to build something that sho
 
 ## Current Status
 
-I am currently in Phase 2: moving user storage from in-memory Python data to Postgres.
+I am currently building out the product domain and production-style backend behaviors.
 
 Completed so far:
 
@@ -35,8 +35,25 @@ Completed so far:
 - SQLAlchemy engine/session setup
 - `User` database model
 - `users` table
+- `Merchant` database model
+- `Transaction` database model
+- `AuditEvent` database model
+- `POST /merchants`
+- `GET /merchants`
+- `POST /transactions`
+- `GET /transactions`
+- `GET /transactions/{id}`
+- `GET /audit-events`
+- idempotent transaction creation with `Idempotency-Key`
+- basic risk decisions: `approved`, `declined`, `review`
+- audit event creation
+- request IDs
+- request logging
+- rate limiting
+- CORS configuration
+- basic security headers
 
-The important shift right now is from memory stored users dicts to postgres stored records
+The important shift has been moving from memory-stored user dicts to Postgres-backed records and then layering real system behavior on top of that.
 
 Memory is runtime state. A database is durable state.
 
@@ -50,6 +67,8 @@ Memory is runtime state. A database is durable state.
 - Docker Compose for local database setup
 - passlib/bcrypt for password hashing
 - JWT for signed access tokens
+- in-memory rate limiting for local API protection
+- request middleware for IDs, logs, and security headers
 
 ## Local Database Setup
 
@@ -114,6 +133,43 @@ curl -i http://127.0.0.1:8000/users/me \
   -H "Authorization: Bearer PASTE_TOKEN_HERE"
 ```
 
+Create a merchant:
+
+```bash
+curl -i -X POST http://127.0.0.1:8000/merchants \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer PASTE_TOKEN_HERE" \
+  -d '{"name":"Summit Coffee","category":"food"}'
+```
+
+List merchants:
+
+```bash
+curl -i http://127.0.0.1:8000/merchants \
+  -H "Authorization: Bearer PASTE_TOKEN_HERE"
+```
+
+Create a transaction:
+
+```bash
+curl -i -X POST http://127.0.0.1:8000/transactions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer PASTE_TOKEN_HERE" \
+  -H "Idempotency-Key: demo-key-001" \
+  -d '{"merchant_id":1,"amount":"125.50","currency":"USD"}'
+```
+
+Retry the same transaction request with the same `Idempotency-Key`. The API should return the original transaction instead of creating a duplicate.
+
+If the same `Idempotency-Key` is reused with a different payload, the API returns `409 Conflict`.
+
+List audit events:
+
+```bash
+curl -i http://127.0.0.1:8000/audit-events \
+  -H "Authorization: Bearer PASTE_TOKEN_HERE"
+```
+
 ## Project Structure
 
 ```txt
@@ -128,6 +184,21 @@ app/
     dependencies.py
     models.py
     session.py
+  audit/
+    routes.py
+    schemas.py
+    service.py
+  merchants/
+    routes.py
+    schemas.py
+  transactions/
+    routes.py
+    schemas.py
+    risk.py
+  middleware/
+    rate_limit.py
+    request_logging.py
+    security_headers.py
   users/
     dependencies.py
     routes.py
@@ -143,6 +214,9 @@ The idea behind the structure:
 - `db/session.py` owns the SQLAlchemy engine/session setup.
 - `db/dependencies.py` gives routes request-scoped DB sessions.
 - `db/models.py` defines database tables.
+- `audit/service.py` writes audit events.
+- `transactions/risk.py` owns the first version of the decision logic.
+- middleware owns request-level cross-cutting behavior.
 
 ## Roadmap
 
@@ -166,7 +240,7 @@ Status: mostly complete.
 - Add created/updated timestamps.
 - Query users by indexed email instead of scanning a list.
 
-Status: in progress.
+Status: complete for the current learning milestone.
 
 ### 3. Add Merchant And Transaction Domain
 
@@ -177,6 +251,8 @@ Status: in progress.
 - `GET /transactions/{id}`
 
 This is where the app starts becoming the actual product instead of only auth.
+
+Status: first slice complete.
 
 ### 4. Add Authorization Decisions
 
@@ -192,6 +268,8 @@ Initial risk rules:
 - very high amount transactions are declined
 - too many transactions in a short time window go to review
 - untrusted merchants go to review
+
+Status: first slice complete with amount, category, and currency rules.
 
 ### 5. Add Idempotency
 
@@ -212,6 +290,8 @@ unique(user_id, idempotency_key)
 
 This is one of the main SWE II-level features of the project.
 
+Status: first slice complete for transaction creation.
+
 ### 6. Add Audit Logs
 
 Record important events:
@@ -225,6 +305,8 @@ Record important events:
 
 The point is traceability: who did what, when, and why.
 
+Status: first slice complete.
+
 ### 7. Add Production Polish
 
 - request IDs
@@ -237,7 +319,23 @@ The point is traceability: who did what, when, and why.
 - API examples
 - tradeoffs and future work
 
+Status: in progress.
+
+## Security And Reliability Notes
+
+- Passwords are stored as hashes, not raw passwords.
+- JWTs are signed and verified server-side.
+- Protected routes use the current-user dependency.
+- User-owned resources are filtered by `current_user.id`.
+- Duplicate email is protected by both app logic and a database unique constraint.
+- Transaction creation requires an `Idempotency-Key`.
+- Duplicate transaction retries return the original result.
+- Reusing an idempotency key with a different payload returns `409 Conflict`.
+- Audit events record important auth, merchant, and transaction actions.
+- Rate limiting is currently in-memory and intended for local/single-process development.
+- CORS origins are configured through environment variables.
+- Basic security headers are added by middleware.
+
 ## Architecture Direction
 
 Clearance starts as a modular monolith. I want the code organized by responsibility without pretending it needs microservices before the domain is mature.
-
