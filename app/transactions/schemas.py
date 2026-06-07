@@ -5,9 +5,11 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class TransactionCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     merchant_id: int = Field(gt=0)
     amount: Decimal = Field(gt=0, max_digits=12, decimal_places=2)
-    currency: str = Field(min_length=3, max_length=3)
+    currency: str = Field(min_length=3, max_length=3, pattern=r"^[A-Za-z]{3}$")
 
     @field_validator("currency")
     @classmethod
@@ -26,7 +28,6 @@ class TransactionResponse(BaseModel):
     status: str
     risk_score: int
     decision_reason: str
-    idempotency_key: str
     created_at: datetime
     updated_at: datetime
 

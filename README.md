@@ -46,12 +46,16 @@ Completed so far:
 - `GET /audit-events`
 - idempotent transaction creation with `Idempotency-Key`
 - basic risk decisions: `approved`, `declined`, `review`
+- merchant trust status
+- velocity-based transaction review
 - audit event creation
 - request IDs
 - request logging
 - rate limiting
 - CORS configuration
 - basic security headers
+- pytest-based API tests
+- dependency manifests for runtime and test setup
 
 The important shift has been moving from memory-stored user dicts to Postgres-backed records and then layering real system behavior on top of that.
 
@@ -69,14 +73,31 @@ Memory is runtime state. A database is durable state.
 - JWT for signed access tokens
 - in-memory rate limiting for local API protection
 - request middleware for IDs, logs, and security headers
+- pytest and httpx for API-level verification
+
+## Local Setup
+
+Install runtime dependencies:
+
+```bash
+.venv/bin/python -m pip install -r requirements.txt
+```
+
+Install runtime plus test dependencies:
+
+```bash
+.venv/bin/python -m pip install -r requirements-dev.txt
+```
 
 ## Local Database Setup
 
 ```txt
 Docker container port: 5432
-Mac host port: 5433(local homebrew postgres was using port 5432, so i'm hosting my docker postgres container on 5433)
-DATABASE_URL: postgresql+psycopg://clearance:clearance@localhost:5433/clearance
+Mac host port: 5433 (local homebrew postgres was using port 5432, so i'm hosting my docker postgres container on 5433)
+DATABASE_URL: postgresql+psycopg://clearance:YOUR_LOCAL_PASSWORD@localhost:5433/clearance
 ```
+
+The Compose database is bound to `127.0.0.1`, so it is reachable from this machine without exposing Postgres on every network interface.
 
 Start Postgres:
 
@@ -98,10 +119,32 @@ docker exec clearance-postgres psql -U clearance -d clearance -c "\dt"
 
 ## Running The API
 
+Create a local `.env` from `.env.example`, set a real `SECRET_KEY`, and use the same local Postgres password in both `POSTGRES_PASSWORD` and `DATABASE_URL`. The app intentionally fails startup if `SECRET_KEY` is missing, too short, or still set to a placeholder.
+
+You can generate a local development secret with:
+
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(32))"
+```
+
 Start the FastAPI app:
 
 ```bash
 .venv/bin/uvicorn app.main:app --reload
+```
+
+For local development, `.env.example` sets:
+
+```env
+AUTO_CREATE_TABLES=true
+ENABLE_DOCS=true
+```
+
+For a production-style deployment, schema changes should be handled by migrations instead of automatic table creation, and API docs can be disabled with:
+
+```env
+AUTO_CREATE_TABLES=false
+ENABLE_DOCS=false
 ```
 
 Health check:
@@ -139,7 +182,7 @@ Create a merchant:
 curl -i -X POST http://127.0.0.1:8000/merchants \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer PASTE_TOKEN_HERE" \
-  -d '{"name":"Summit Coffee","category":"food"}'
+  -d '{"name":"Summit Coffee","category":"food","trust_status":"trusted"}'
 ```
 
 List merchants:
@@ -170,6 +213,32 @@ curl -i http://127.0.0.1:8000/audit-events \
   -H "Authorization: Bearer PASTE_TOKEN_HERE"
 ```
 
+## Running Tests
+
+Run the backend test suite:
+
+```bash
+.venv/bin/python -m pytest
+```
+
+Run tests with coverage:
+
+```bash
+.venv/bin/python -m coverage run -m pytest
+.venv/bin/python -m coverage report
+```
+
+The tests use a throwaway SQLite database in a temporary directory. That keeps the feedback loop fast and means the tests do not need Docker or local Postgres to be running.
+
+Optional Postgres integration tests run when `POSTGRES_INTEGRATION_DATABASE_URL` is set:
+
+```bash
+POSTGRES_INTEGRATION_DATABASE_URL=postgresql+psycopg://clearance:YOUR_LOCAL_PASSWORD@localhost:5433/clearance \
+  .venv/bin/python -m pytest tests/integration
+```
+
+The integration tests create a temporary Postgres schema and drop it after the run.
+
 ## Project Structure
 
 ```txt
@@ -178,7 +247,10 @@ app/
   auth/
     routes.py
     schemas.py
+    service.py
   core/
+    config.py
+    request_context.py
     security.py
   db/
     dependencies.py
@@ -191,10 +263,12 @@ app/
   merchants/
     routes.py
     schemas.py
+    service.py
   transactions/
     routes.py
     schemas.py
     risk.py
+    service.py
   middleware/
     rate_limit.py
     request_logging.py
@@ -202,7 +276,15 @@ app/
   users/
     dependencies.py
     routes.py
+    schemas.py
 docker-compose.yml
+requirements.txt
+requirements-dev.txt
+alembic.ini
+migrations/
+docs/
+.github/workflows/ci.yml
+tests/
 ```
 
 The idea behind the structure:
@@ -210,15 +292,21 @@ The idea behind the structure:
 - `main.py` wires the app together.
 - route files own HTTP endpoints.
 - schema files own request and response contracts.
+- service files own reusable domain/application logic.
 - `core/security.py` owns password hashing and JWT helpers.
+- `core/config.py` owns environment-backed runtime configuration.
+- `core/request_context.py` owns shared request metadata helpers.
 - `db/session.py` owns the SQLAlchemy engine/session setup.
 - `db/dependencies.py` gives routes request-scoped DB sessions.
 - `db/models.py` defines database tables.
 - `audit/service.py` writes audit events.
 - `transactions/risk.py` owns the first version of the decision logic.
 - middleware owns request-level cross-cutting behavior.
+- tests exercise API behavior and security boundaries from the outside.
 
 ## Roadmap
+
+Current milestone: Clearance has a working authenticated transaction domain with persistent storage, idempotent transaction creation, audit events, risk decisions, security middleware, Alembic migrations, CI, and a pytest/coverage verification loop. The next major step is making risk rules configurable and adding deeper Postgres/concurrency coverage.
 
 ### 1. Finish Auth Foundation
 
@@ -229,7 +317,18 @@ The idea behind the structure:
 - Add response models.
 - Refactor auth/security code out of `main.py`.
 
-Status: mostly complete.
+Status: complete for the current learning milestone.
+
+What is in place:
+
+- registration and login routes
+- normalized email lookup
+- password hashing with `bcrypt_sha256`
+- signed JWT access tokens
+- protected `GET /users/me`
+- current-user dependency
+- request/response schemas
+- basic login timing hardening for missing users
 
 ### 2. Move From Memory To Postgres
 
@@ -242,6 +341,16 @@ Status: mostly complete.
 
 Status: complete for the current learning milestone.
 
+What is in place:
+
+- SQLAlchemy engine/session setup
+- Postgres-backed `User` model
+- unique/indexed email
+- created/updated timestamps
+- Docker Compose local Postgres
+- environment-backed `DATABASE_URL`
+- Alembic migration setup for repeatable schema changes
+
 ### 3. Add Merchant And Transaction Domain
 
 - `POST /merchants`
@@ -252,7 +361,17 @@ Status: complete for the current learning milestone.
 
 This is where the app starts becoming the actual product instead of only auth.
 
-Status: first slice complete.
+Status: complete for the current learning milestone.
+
+What is in place:
+
+- user-owned merchants
+- merchant categories
+- merchant trust status
+- transaction creation
+- transaction listing/detail lookup
+- ownership scoping so users cannot read or transact against another user's resources
+- bounded list endpoints
 
 ### 4. Add Authorization Decisions
 
@@ -269,7 +388,23 @@ Initial risk rules:
 - too many transactions in a short time window go to review
 - untrusted merchants go to review
 
-Status: first slice complete with amount, category, and currency rules.
+Status: current product slice complete.
+
+What is in place:
+
+- amount-based review threshold
+- amount-based decline threshold
+- high-risk merchant category review
+- untrusted merchant review
+- non-USD currency review
+- recent-transaction velocity review
+- risk score and decision reason stored on each transaction
+
+Next improvements:
+
+- make risk rules configurable instead of hardcoded
+- add per-merchant and per-user velocity windows
+- add tests for concurrent transaction creation/race conditions
 
 ### 5. Add Idempotency
 
@@ -290,7 +425,21 @@ unique(user_id, idempotency_key)
 
 This is one of the main SWE II-level features of the project.
 
-Status: first slice complete for transaction creation.
+Status: complete for the current learning milestone.
+
+What is in place:
+
+- required `Idempotency-Key` header
+- safe key format validation
+- `unique(user_id, idempotency_key)` database constraint
+- same-key/same-payload retry returns the original transaction
+- same-key/different-payload retry returns `409 Conflict`
+- idempotency keys are stored but not exposed in API responses
+
+Next improvements:
+
+- add Postgres-backed concurrency tests
+- consider storing a canonical request hash for stronger payload comparison
 
 ### 6. Add Audit Logs
 
@@ -299,13 +448,26 @@ Record important events:
 - `REGISTERED_USER`
 - `LOGGED_IN`
 - `CREATED_MERCHANT`
-- `AUTHORIZED_TRANSACTION`
-- `DECLINED_TRANSACTION`
-- `REVIEWED_TRANSACTION`
+- `TRANSACTION_APPROVED`
+- `TRANSACTION_DECLINED`
+- `TRANSACTION_REVIEW`
 
 The point is traceability: who did what, when, and why.
 
-Status: first slice complete.
+Status: complete for the current learning milestone.
+
+What is in place:
+
+- `AuditEvent` model
+- audit writes for registration, login, merchant creation, and transaction decisions
+- request ID attached to audit events when available
+- metadata JSON for transaction decision context
+- protected `GET /audit-events`
+
+Next improvements:
+
+- add richer filtering by action/entity/date
+- split audit metadata into typed columns if query patterns justify it
 
 ### 7. Add Production Polish
 
@@ -319,22 +481,82 @@ Status: first slice complete.
 - API examples
 - tradeoffs and future work
 
-Status: in progress.
+Status: in progress, with the first hardening pass complete.
+
+What is in place:
+
+- request IDs
+- request logging with timing
+- security headers
+- request body size limits enforced on the request stream
+- in-memory rate limiting
+- trusted-proxy guard for `X-Forwarded-For`
+- CORS config through environment variables
+- strict env parsing for security-sensitive config
+- dependency manifests
+- Docker Compose local Postgres polish
+- pytest API suite
+- optional Postgres integration tests
+- GitHub Actions CI
+- coverage gate at 80%
+- current coverage around 91%
+- architecture, tradeoffs, and deployment docs
+
+Next improvements:
+
+- Redis/shared-store rate limiting for multi-instance deployments
+- login-specific throttling
+- CI badge once the GitHub repo is connected
+- richer Postgres concurrency tests
+
+## Migrations
+
+This project uses Alembic for repeatable schema changes:
+
+```bash
+.venv/bin/alembic upgrade head
+```
+
+`AUTO_CREATE_TABLES=true` is still convenient for the local learning loop with a fresh database. For production-like environments, use migrations instead.
+
+## More Documentation
+
+- [Architecture](docs/architecture.md)
+- [Tradeoffs and future work](docs/tradeoffs.md)
+- [Deployment notes](docs/deployment.md)
 
 ## Security And Reliability Notes
 
 - Passwords are stored as hashes, not raw passwords.
+- New password hashes use `bcrypt_sha256` to avoid raw bcrypt's 72-byte password limit.
 - JWTs are signed and verified server-side.
+- `SECRET_KEY` is required at startup and must not be a placeholder.
+- Runtime configuration is centralized in `app/core/config.py`.
+- `DATABASE_URL` and `SECRET_KEY` are required environment values.
 - Protected routes use the current-user dependency.
 - User-owned resources are filtered by `current_user.id`.
+- SQLAlchemy ORM queries are used instead of string-built SQL, so user input is bound as parameters rather than interpolated into SQL strings.
+- Emails are normalized before lookup/storage.
+- Merchant fields reject blank/control-character input, and categories are constrained to a safe character set.
+- Merchant trust status is constrained to `trusted` or `untrusted`.
+- Transaction currencies must be three letters and are normalized to uppercase.
+- Bearer tokens and idempotency keys have explicit length/format checks.
+- Request bodies over the configured `MAX_REQUEST_BODY_BYTES` are rejected.
+- Request body size is enforced while the app reads the request stream, not only from `Content-Length`.
 - Duplicate email is protected by both app logic and a database unique constraint.
 - Transaction creation requires an `Idempotency-Key`.
 - Duplicate transaction retries return the original result.
 - Reusing an idempotency key with a different payload returns `409 Conflict`.
+- Idempotency keys are stored for request safety but are not returned in transaction responses.
 - Audit events record important auth, merchant, and transaction actions.
+- Risk decisions now consider amount, merchant category, merchant trust status, currency, and recent transaction velocity.
 - Rate limiting is currently in-memory and intended for local/single-process development.
+- Rate limiting does not trust proxy headers unless `TRUST_PROXY_HEADERS=true` and the direct client IP is inside `TRUSTED_PROXY_CIDRS`.
+- Incoming `X-Request-ID` values are validated before they are logged or echoed.
+- Unknown request fields are rejected instead of silently ignored.
 - CORS origins are configured through environment variables.
-- Basic security headers are added by middleware.
+- Basic security headers and `Cache-Control: no-store` are added by middleware.
+- API tests cover auth, resource ownership, idempotency, validation, request IDs, body size limits, and rate limiting behavior.
 
 ## Architecture Direction
 

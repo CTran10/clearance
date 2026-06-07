@@ -3,11 +3,11 @@ services:
     image: postgres:16
     container_name: clearance-postgres
     environment:
-      POSTGRES_USER: clearance
-      POSTGRES_PASSWORD: clearance
-      POSTGRES_DB: clearance
+      POSTGRES_USER: ${POSTGRES_USER:-clearance}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-clearance}
     ports:
-      - "5433:5432"
+      - "127.0.0.1:${POSTGRES_HOST_PORT:-5433}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
