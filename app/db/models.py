@@ -1,7 +1,16 @@
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint, func
+from sqlalchemy import (
+    DateTime,
+    ForeignKey,
+    Integer,
+    Numeric,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.session import Base
@@ -40,6 +49,11 @@ class Merchant(Base):
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     category: Mapped[str] = mapped_column(String(100), nullable=False)
+    trust_status: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        server_default="trusted",
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
@@ -59,12 +73,24 @@ class Transaction(Base):
     # the unique constraint is PER USER (user_id + key) not global — bc two different users could totally
     # generate the same random key and i don't want user A's retry to collide with user B's brand new txn
     __table_args__ = (
-        UniqueConstraint("user_id", "idempotency_key", name="uq_transactions_user_id_idempotency_key"),
+        UniqueConstraint(
+            "user_id",
+            "idempotency_key",
+            name="uq_transactions_user_id_idempotency_key",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True, nullable=False)
-    merchant_id: Mapped[int] = mapped_column(ForeignKey("merchants.id"), index=True, nullable=False)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id"),
+        index=True,
+        nullable=False,
+    )
+    merchant_id: Mapped[int] = mapped_column(
+        ForeignKey("merchants.id"),
+        index=True,
+        nullable=False,
+    )
     amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
     currency: Mapped[str] = mapped_column(String(3), nullable=False)
     status: Mapped[str] = mapped_column(String(20), index=True, nullable=False)
@@ -88,7 +114,11 @@ class AuditEvent(Base):
     __tablename__ = "audit_events"
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
-    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True, nullable=True)
+    user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id"),
+        index=True,
+        nullable=True,
+    )
     action: Mapped[str] = mapped_column(String(100), index=True, nullable=False)
     entity_type: Mapped[str] = mapped_column(String(100), index=True, nullable=False)
     entity_id: Mapped[int | None] = mapped_column(Integer, index=True, nullable=True)

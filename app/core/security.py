@@ -1,29 +1,30 @@
-from passlib.context import CryptContext
-import os
 import time
-from jose import jwt, JWTError
+
 from fastapi import HTTPException, status
+from jose import jwt, JWTError
+from passlib.context import CryptContext
 
+from app.core.config import settings
 
-ACCESS_TOKEN_EXPIRE_SECONDS = int(os.getenv("ACCESS_TOKEN_EXPIRE_SECONDS", "1800"))
-SECRET_KEY = os.getenv("SECRET_KEY", "dev-only-change-me")
-ALGORITHM = "HS256" #common, supported, fast, secure enough for a simple app, but trades off hash strengths and depends on secret key quality
+ACCESS_TOKEN_EXPIRE_SECONDS = settings.access_token_expire_seconds
 # spent way too long thinking HS256 vs RS256 was about how strong the hash is lol.
 # turns out HS = one shared secret, RS = public/private key pair. we're tiny so shared secret is fine for now
+ALGORITHM = "HS256"
+SECRET_KEY = settings.secret_key  # pulled from settings now instead of os.getenv everywhere — one place to forget to set it instead of five
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-# wait why do i need a whole "context" just to hash a password?? apparently bcrypt salts
-# for you automatically so you don't store the salt yourself. neat, one less thing to mess up
+# added bcrypt_sha256 in front of plain bcrypt bc bcrypt silently TRUNCATES passwords past 72 bytes (!!).
+# so two different long passwords could match. sha256-ing first squishes any length down to a safe size. sneaky bug avoided
+pwd_context = CryptContext(schemes=["bcrypt_sha256", "bcrypt"], deprecated="auto")
 
-# input user provided password and use .hash from cryptcontext to hash the password
+
 def hash_password(password: str) -> str:
     return pwd_context.hash(password)
 
-#compareds user input against stored pw hash
-def verify_password(plain_password: str, password_hash:str) -> bool:
-    return pwd_context.verify(plain_password,password_hash)
 
-# generate auth token
+def verify_password(plain_password: str, password_hash: str) -> bool:
+    return pwd_context.verify(plain_password, password_hash)
+
+
 def create_access_token(user_id: int) -> str:
     now = int(time.time())
 
@@ -35,13 +36,12 @@ def create_access_token(user_id: int) -> str:
 
     return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
 
-#decodes token using env secret key and alg type
+
 def decode_access_token(token: str) -> dict:
     try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        return payload
+        return jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
     except JWTError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid access token"
+            detail="Invalid access token",
         )

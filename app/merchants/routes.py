@@ -1,14 +1,16 @@
-from fastapi import APIRouter, Depends, Request, status
+from fastapi import APIRouter, Depends, Query, Request, status
 from sqlalchemy.orm import Session
 
 from app.audit.service import create_audit_event
+from app.core.request_context import get_request_id
 from app.db.dependencies import get_db
-from app.db.models import Merchant, User
+from app.db.models import User
 from app.merchants.schemas import (
     MerchantCreateRequest,
     MerchantListResponse,
     MerchantResponse,
 )
+from app.merchants.service import create_merchant_for_user, list_merchants_for_user
 from app.users.dependencies import get_current_user
 
 router = APIRouter(prefix="/merchants", tags=["merchants"])
@@ -25,21 +27,14 @@ def create_merchant(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    merchant = Merchant(
-        owner_user_id=current_user.id,
-        name=payload.name,
-        category=payload.category,
-    )
-
-    db.add(merchant)
-    db.flush()
+    merchant = create_merchant_for_user(db, owner=current_user, payload=payload)
     create_audit_event(
         db,
         action="CREATED_MERCHANT",
         entity_type="merchant",
         entity_id=merchant.id,
         user_id=current_user.id,
-        request_id=getattr(request.state, "request_id", None),
+        request_id=get_request_id(request),
         metadata={"name": merchant.name, "category": merchant.category},
     )
     db.commit()
@@ -52,11 +47,6 @@ def create_merchant(
 def list_merchants(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
+    limit: int = Query(default=100, ge=1, le=500),
 ):
-    merchants = (
-        db.query(Merchant)
-        .filter(Merchant.owner_user_id == current_user.id)
-        .all()
-    )
-
-    return {"merchants": merchants}
+    return {"merchants": list_merchants_for_user(db, current_user, limit=limit)}
