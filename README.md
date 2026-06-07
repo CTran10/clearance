@@ -317,7 +317,7 @@ Current milestone: Clearance has a working authenticated transaction domain with
 - Add response models.
 - Refactor auth/security code out of `main.py`.
 
-Status: complete for the current learning milestone.
+Status: complete
 
 What is in place:
 
@@ -339,7 +339,7 @@ What is in place:
 - Add created/updated timestamps.
 - Query users by indexed email instead of scanning a list.
 
-Status: complete for the current learning milestone.
+Status: complete
 
 What is in place:
 
@@ -361,7 +361,7 @@ What is in place:
 
 This is where the app starts becoming the actual product instead of only auth.
 
-Status: complete for the current learning milestone.
+Status: complete
 
 What is in place:
 
@@ -388,7 +388,7 @@ Initial risk rules:
 - too many transactions in a short time window go to review
 - untrusted merchants go to review
 
-Status: current product slice complete.
+Status: current product slice complete
 
 What is in place:
 
@@ -425,7 +425,7 @@ unique(user_id, idempotency_key)
 
 This is one of the main SWE II-level features of the project.
 
-Status: complete for the current learning milestone.
+Status: complete
 
 What is in place:
 
@@ -454,7 +454,7 @@ Record important events:
 
 The point is traceability: who did what, when, and why.
 
-Status: complete for the current learning milestone.
+Status: complete
 
 What is in place:
 
@@ -481,7 +481,7 @@ Next improvements:
 - API examples
 - tradeoffs and future work
 
-Status: in progress, with the first hardening pass complete.
+Status: in progress
 
 What is in place:
 
