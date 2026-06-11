@@ -62,6 +62,7 @@ The current health check confirms the app process is serving requests. A future 
 GitHub Actions runs:
 
 ```bash
+python -m alembic upgrade head
 python -m coverage run -m pytest
 python -m coverage report
 ```
