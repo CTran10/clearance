@@ -3,12 +3,13 @@ import uuid
 from decimal import Decimal
 
 import pytest
+from alembic import command
+from alembic.config import Config
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 
 from app.db.models import Merchant, Transaction, User
-from app.db.session import Base
 
 POSTGRES_DATABASE_URL = os.getenv("POSTGRES_INTEGRATION_DATABASE_URL")
 
@@ -29,12 +30,12 @@ def postgres_engine():
     with admin_engine.begin() as connection:
         connection.execute(text(f'CREATE SCHEMA "{schema_name}"'))
 
+    run_migrations(schema_name)
     test_engine = create_engine(
         POSTGRES_DATABASE_URL,
         connect_args={"options": f"-csearch_path={schema_name}"},
         pool_pre_ping=True,
     )
-    Base.metadata.create_all(bind=test_engine)
 
     try:
         yield test_engine
@@ -43,6 +44,38 @@ def postgres_engine():
         with admin_engine.begin() as connection:
             connection.execute(text(f'DROP SCHEMA IF EXISTS "{schema_name}" CASCADE'))
         admin_engine.dispose()
+
+
+def run_migrations(schema_name: str) -> None:
+    config = Config("alembic.ini")
+    config.set_main_option("sqlalchemy.url", POSTGRES_DATABASE_URL)
+    config.attributes["connect_args"] = {"options": f"-csearch_path={schema_name}"}
+    command.upgrade(config, "head")
+
+
+def test_alembic_migrations_create_current_postgres_schema(postgres_engine):
+    session_factory = sessionmaker(
+        autocommit=False,
+        autoflush=False,
+        bind=postgres_engine,
+    )
+
+    db = session_factory()
+    try:
+        table_names = {
+            row[0]
+            for row in db.execute(
+                text(
+                    "select tablename "
+                    "from pg_tables "
+                    "where schemaname = current_schema()"
+                )
+            )
+        }
+
+        assert {"users", "merchants", "transactions", "audit_events"}.issubset(table_names)
+    finally:
+        db.close()
 
 
 def test_postgres_enforces_transaction_idempotency_constraint(postgres_engine):
