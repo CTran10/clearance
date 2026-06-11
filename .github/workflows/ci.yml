@@ -26,7 +26,11 @@ jobs:
           --health-retries 5
 
     env:
+      DATABASE_URL: postgresql+psycopg://clearance:clearance_ci@localhost:5432/clearance_test
       POSTGRES_INTEGRATION_DATABASE_URL: postgresql+psycopg://clearance:clearance_ci@localhost:5432/clearance_test
+      SECRET_KEY: ci-secret-key-with-more-than-thirty-two-characters
+      AUTO_CREATE_TABLES: "false"
+      ENABLE_DOCS: "false"
 
     steps:
       - name: Checkout
@@ -41,6 +45,9 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements-dev.txt
+
+      - name: Run migrations
+        run: python -m alembic upgrade head
 
       - name: Run tests with coverage
         run: |
