@@ -2,10 +2,14 @@ import logging
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.audit.routes import router as audit_router
 from app.auth.routes import router as auth_router
 from app.core.config import settings
+from app.db.session import Base, SessionLocal, engine
 from app.merchants.routes import router as merchants_router
 from app.middleware.body_size import BodySizeLimitMiddleware
 from app.middleware.rate_limit import RateLimitMiddleware
@@ -13,9 +17,6 @@ from app.middleware.request_logging import RequestLoggingMiddleware
 from app.middleware.security_headers import SecurityHeadersMiddleware
 from app.transactions.routes import router as transactions_router
 from app.users.routes import router as users_router
-
-from app.db import models
-from app.db.session import Base, engine
 
 
 def create_app() -> FastAPI:
@@ -61,7 +62,7 @@ def configure_middleware(app: FastAPI) -> None:
         window_seconds=settings.rate_limit_window_seconds,
         trust_proxy_headers=settings.trust_proxy_headers,
         trusted_proxy_cidrs=settings.trusted_proxy_cidrs,
-        excluded_paths={"/health"},
+        excluded_paths={"/health", "/health/db"},
     )
     app.add_middleware(RequestLoggingMiddleware)
     app.add_middleware(SecurityHeadersMiddleware)
@@ -79,6 +80,26 @@ def register_health_route(app: FastAPI) -> None:
     @app.get("/health")
     def health():
         return {"status": "ok"}
+
+    @app.get("/health/db")
+    def database_health():
+        if check_database_health():
+            return {"status": "ok", "database": "ready"}
+        return JSONResponse(
+            status_code=503,
+            content={"status": "error", "database": "unavailable"},
+        )
+
+
+def check_database_health() -> bool:
+    db = SessionLocal()
+    try:
+        db.execute(text("select 1"))
+        return True
+    except SQLAlchemyError:
+        return False
+    finally:
+        db.close()
 
 
 app = create_app()

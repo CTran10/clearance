@@ -24,8 +24,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         self.window_seconds = window_seconds
         self.trust_proxy_headers = trust_proxy_headers
         self.trusted_proxy_networks = [
-            ipaddress.ip_network(cidr)
-            for cidr in trusted_proxy_cidrs or []
+            ipaddress.ip_network(cidr) for cidr in trusted_proxy_cidrs or []
         ]
         self.excluded_paths = excluded_paths or set()
         # heads up future me: this dict lives in ONE process's memory. the second we run 2 app instances

@@ -55,11 +55,7 @@ def test_transaction_creation_stores_canonical_idempotency_request_hash(client):
 
     db = SessionLocal()
     try:
-        transaction = (
-            db.query(Transaction)
-            .filter(Transaction.id == response.json()["id"])
-            .one()
-        )
+        transaction = db.query(Transaction).filter(Transaction.id == response.json()["id"]).one()
         expected_hash = build_idempotency_request_hash(
             TransactionCreateRequest(
                 merchant_id=merchant["id"],
@@ -245,3 +241,62 @@ def test_audit_events_record_user_domain_actions(client):
         "TRANSACTION_APPROVED",
     }.issubset(actions)
     assert all(event["user_id"] == 1 for event in audit_events)
+
+
+def test_audit_events_can_be_filtered_by_action_and_entity(client):
+    token = register_and_login(client, "audit-filter@example.com")
+    merchant = create_merchant(client, token)
+
+    transaction_response = client.post(
+        "/transactions",
+        headers=auth_headers(token, **{"Idempotency-Key": "audit-filter-transaction"}),
+        json={"merchant_id": merchant["id"], "amount": "50.00", "currency": "USD"},
+    )
+
+    merchant_audit_response = client.get(
+        "/audit-events?action=CREATED_MERCHANT&entity_type=merchant",
+        headers=auth_headers(token),
+    )
+    transaction_audit_response = client.get(
+        f"/audit-events?entity_type=transaction&entity_id={transaction_response.json()['id']}",
+        headers=auth_headers(token),
+    )
+
+    assert transaction_response.status_code == 201
+    assert merchant_audit_response.status_code == 200
+    assert transaction_audit_response.status_code == 200
+
+    merchant_events = merchant_audit_response.json()["audit_events"]
+    transaction_events = transaction_audit_response.json()["audit_events"]
+    assert [event["action"] for event in merchant_events] == ["CREATED_MERCHANT"]
+    assert [event["entity_type"] for event in merchant_events] == ["merchant"]
+    assert [event["entity_id"] for event in merchant_events] == [merchant["id"]]
+    assert [event["entity_type"] for event in transaction_events] == ["transaction"]
+    assert [event["entity_id"] for event in transaction_events] == [
+        transaction_response.json()["id"]
+    ]
+
+
+def test_audit_events_can_be_filtered_by_created_window(client):
+    token = register_and_login(client, "audit-date-filter@example.com")
+    create_merchant(client, token)
+
+    response = client.get(
+        "/audit-events?created_after=2999-01-01T00:00:00Z",
+        headers=auth_headers(token),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["audit_events"] == []
+
+
+def test_audit_event_created_window_must_be_valid(client):
+    token = register_and_login(client, "audit-invalid-window@example.com")
+
+    response = client.get(
+        ("/audit-events?created_after=2026-01-02T00:00:00&created_before=2026-01-01T00:00:00"),
+        headers=auth_headers(token),
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "created_after must be before created_before"

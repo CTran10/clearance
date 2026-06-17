@@ -1,7 +1,7 @@
 import hashlib
 import json
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from fastapi import HTTPException, status
@@ -231,7 +231,7 @@ def count_recent_transactions_for_user(
     user_id: int,
     window_seconds: int,
 ) -> int:
-    cutoff = datetime.now(timezone.utc) - timedelta(seconds=window_seconds)
+    cutoff = datetime.now(UTC) - timedelta(seconds=window_seconds)
     return (
         db.query(func.count(Transaction.id))
         .filter(

@@ -1,12 +1,17 @@
 import re
+import time
 
 import anyio
+from fastapi.testclient import TestClient
+from jose import jwt
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
-from fastapi.testclient import TestClient
 
+from app.core.security import ALGORITHM, SECRET_KEY
+from app.db.models import User
+from app.db.session import SessionLocal
 from app.middleware.body_size import BodySizeLimitMiddleware
 from app.middleware.rate_limit import RateLimitMiddleware
 from app.middleware.security_headers import SecurityHeadersMiddleware
@@ -79,6 +84,63 @@ def test_invalid_authorization_header_is_rejected(client):
 
     assert response.status_code == 401
     assert response.json()["detail"] == "Invalid Authorization header"
+
+
+def test_access_token_requires_current_issuer_and_audience_claims(client):
+    register_user(client, "legacy-token@example.com")
+    now = int(time.time())
+    legacy_token = jwt.encode(
+        {
+            "sub": "1",
+            "iat": now,
+            "exp": now + 1800,
+        },
+        SECRET_KEY,
+        algorithm=ALGORITHM,
+    )
+
+    response = client.get("/users/me", headers=auth_headers(legacy_token))
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Invalid access token"
+
+
+def test_expired_access_token_is_rejected(client):
+    register_user(client, "expired-token@example.com")
+    now = int(time.time())
+    expired_token = jwt.encode(
+        {
+            "sub": "1",
+            "iat": now - 3600,
+            "exp": now - 1800,
+            "iss": "clearance-api",
+            "aud": "clearance-clients",
+        },
+        SECRET_KEY,
+        algorithm=ALGORITHM,
+    )
+
+    response = client.get("/users/me", headers=auth_headers(expired_token))
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Invalid access token"
+
+
+def test_deleted_user_access_token_is_rejected(client):
+    token = register_and_login(client, "deleted-token-user@example.com")
+
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.email == "deleted-token-user@example.com").one()
+        db.delete(user)
+        db.commit()
+    finally:
+        db.close()
+
+    response = client.get("/users/me", headers=auth_headers(token))
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "User no longer exists"
 
 
 def test_idempotency_key_is_required_for_transaction_creation(client):

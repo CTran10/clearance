@@ -73,11 +73,7 @@ def test_alembic_migrations_create_current_postgres_schema(postgres_engine):
         table_names = {
             row[0]
             for row in db.execute(
-                text(
-                    "select tablename "
-                    "from pg_tables "
-                    "where schemaname = current_schema()"
-                )
+                text("select tablename from pg_tables where schemaname = current_schema()")
             )
         }
 
@@ -153,6 +149,67 @@ def test_postgres_stores_money_with_two_decimal_places(postgres_engine):
         db.refresh(transaction)
 
         assert transaction.amount == Decimal("12.35")
+    finally:
+        db.rollback()
+        db.close()
+
+
+def test_postgres_transaction_velocity_rule_uses_persisted_recent_transactions(
+    postgres_engine,
+):
+    session_factory = sessionmaker(
+        autocommit=False,
+        autoflush=False,
+        bind=postgres_engine,
+    )
+
+    db = session_factory()
+    try:
+        user = User(
+            email="postgres-velocity@example.com",
+            password_hash="not-a-real-password-hash",
+        )
+        db.add(user)
+        db.flush()
+
+        merchant = Merchant(
+            owner_user_id=user.id,
+            name="Velocity Merchant",
+            category="retail",
+            trust_status="trusted",
+        )
+        db.add(merchant)
+        db.commit()
+
+        payload = TransactionCreateRequest(
+            merchant_id=merchant.id,
+            amount=Decimal("10.00"),
+            currency="USD",
+        )
+        for transaction_number in range(5):
+            transaction, created = transaction_service.create_transaction_with_idempotency(
+                db,
+                user=user,
+                payload=payload,
+                idempotency_key=f"postgres-velocity-{transaction_number}",
+                request_id="postgres-velocity-test",
+            )
+            assert created
+            assert transaction.status == "approved"
+
+        velocity_transaction, created = transaction_service.create_transaction_with_idempotency(
+            db,
+            user=user,
+            payload=payload,
+            idempotency_key="postgres-velocity-review",
+            request_id="postgres-velocity-test",
+        )
+
+        assert created
+        assert velocity_transaction.status == "review"
+        assert velocity_transaction.decision_reason == (
+            "Too many recent transactions for this user"
+        )
     finally:
         db.rollback()
         db.close()

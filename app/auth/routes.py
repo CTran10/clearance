@@ -1,8 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.responses import JSONResponse
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.audit.service import create_audit_event
+from app.auth.rate_limit import LoginAttemptLimiter
 from app.auth.schemas import (
     LoginRequest,
     LoginResponse,
@@ -10,11 +12,16 @@ from app.auth.schemas import (
     RegisterResponse,
 )
 from app.auth.service import create_user, find_user_by_email, password_matches
+from app.core.config import settings
 from app.core.request_context import get_request_id
 from app.core.security import create_access_token
 from app.db.dependencies import get_db
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+login_attempt_limiter = LoginAttemptLimiter(
+    max_attempts=settings.login_rate_limit_max_attempts,
+    window_seconds=settings.login_rate_limit_window_seconds,
+)
 
 
 @router.post(
@@ -64,13 +71,20 @@ def login(
     request: Request,
     db: Session = Depends(get_db),
 ):
+    # rate limit BEFORE we even look at the password. otherwise someone can just brute-force passwords forever.
+    # keyed on ip+email so one attacker can't lock out a victim by spamming THEIR email (learned that's a real attack)
+    if login_attempt_limiter.is_limited(request, payload.email):
+        return login_rate_limited_response()
+
     # generic 401 on purpose: same exact message whether the email doesn't exist OR the password is wrong.
     # saying "no such email" would quietly leak which emails are registered (user enumeration). felt unhelpful, is the point.
     # bonus: password_matches still runs a hash check even on a missing user so the response time doesn't rat us out either
     user = find_user_by_email(db, payload.email)
     if not password_matches(user, payload.password):
+        login_attempt_limiter.record_failure(request, payload.email)
         raise_invalid_credentials()
 
+    login_attempt_limiter.clear(request, payload.email)
     access_token = create_access_token(user.id)
     create_audit_event(
         db,
@@ -104,4 +118,15 @@ def raise_invalid_credentials() -> None:
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Invalid email or password",
+    )
+
+
+def login_rate_limited_response() -> JSONResponse:
+    return JSONResponse(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        content={
+            "detail": "Too many failed login attempts",
+            "limit": login_attempt_limiter.max_attempts,
+            "window_seconds": login_attempt_limiter.window_seconds,
+        },
     )

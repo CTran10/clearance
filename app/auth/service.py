@@ -4,8 +4,7 @@ from app.core.security import hash_password, verify_password
 from app.db.models import User
 
 DUMMY_PASSWORD_HASH = (
-    "$bcrypt-sha256$v=2,t=2b,r=12$SM38yB/mbPTDX39aqr426O"
-    "$LqC.N40CxJXLdNtmkGYQXs.fONeOXF6"
+    "$bcrypt-sha256$v=2,t=2b,r=12$SM38yB/mbPTDX39aqr426O$LqC.N40CxJXLdNtmkGYQXs.fONeOXF6"
 )
 
 

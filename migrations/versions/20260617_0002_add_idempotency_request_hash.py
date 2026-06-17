@@ -4,10 +4,11 @@ Revision ID: 20260617_0002
 Revises: 20260606_0001
 Create Date: 2026-06-17 00:00:00.000000
 """
+
 from collections.abc import Sequence
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 
 revision: str = "20260617_0002"
 down_revision: str | None = "20260606_0001"

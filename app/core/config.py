@@ -80,9 +80,13 @@ class Settings:
     database_url: str
     secret_key: str
     access_token_expire_seconds: int
+    jwt_issuer: str
+    jwt_audience: str
     cors_origins: list[str]
     rate_limit_max_requests: int
     rate_limit_window_seconds: int
+    login_rate_limit_max_attempts: int
+    login_rate_limit_window_seconds: int
     trust_proxy_headers: bool
     trusted_proxy_cidrs: list[str]
     enable_docs: bool
@@ -99,9 +103,13 @@ settings = Settings(
     database_url=_get_required_env("DATABASE_URL"),
     secret_key=_get_secret_key(),
     access_token_expire_seconds=_get_positive_int_env("ACCESS_TOKEN_EXPIRE_SECONDS", 1800),
+    jwt_issuer=os.getenv("JWT_ISSUER", "clearance-api"),
+    jwt_audience=os.getenv("JWT_AUDIENCE", "clearance-clients"),
     cors_origins=_get_csv_env("CORS_ORIGINS"),
     rate_limit_max_requests=_get_positive_int_env("RATE_LIMIT_MAX_REQUESTS", 120),
     rate_limit_window_seconds=_get_positive_int_env("RATE_LIMIT_WINDOW_SECONDS", 60),
+    login_rate_limit_max_attempts=_get_positive_int_env("LOGIN_RATE_LIMIT_MAX_ATTEMPTS", 5),
+    login_rate_limit_window_seconds=_get_positive_int_env("LOGIN_RATE_LIMIT_WINDOW_SECONDS", 300),
     trust_proxy_headers=_get_bool_env("TRUST_PROXY_HEADERS", False),
     trusted_proxy_cidrs=_get_csv_env("TRUSTED_PROXY_CIDRS"),
     enable_docs=_get_bool_env("ENABLE_DOCS", False),

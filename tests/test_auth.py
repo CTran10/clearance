@@ -1,9 +1,77 @@
+from types import SimpleNamespace
+
 from tests.helpers import (
     auth_headers,
     login_user,
     register_and_login,
     register_user,
 )
+
+
+def test_login_attempt_limiter_expires_old_failures(monkeypatch):
+    from app.auth import rate_limit
+    from app.auth.rate_limit import LoginAttemptLimiter
+
+    current_time = 0.0
+    monkeypatch.setattr(rate_limit.time, "monotonic", lambda: current_time)
+
+    request = SimpleNamespace(client=SimpleNamespace(host="testclient"))
+    limiter = LoginAttemptLimiter(max_attempts=1, window_seconds=10)
+
+    limiter.record_failure(request, "expired-login@example.com")
+    assert limiter.is_limited(request, "expired-login@example.com")
+
+    current_time = 11.0
+
+    assert not limiter.is_limited(request, "expired-login@example.com")
+    assert "testclient:expired-login@example.com" not in limiter.failed_attempts
+
+
+def test_login_failures_are_throttled_per_client_and_email(client, monkeypatch):
+    from app.auth import routes as auth_routes
+    from app.auth.rate_limit import LoginAttemptLimiter
+
+    monkeypatch.setattr(
+        auth_routes,
+        "login_attempt_limiter",
+        LoginAttemptLimiter(max_attempts=2, window_seconds=60),
+    )
+
+    register_response = register_user(client, "throttled-login@example.com")
+    first_failure = login_user(client, "throttled-login@example.com", "WrongPassword1!")
+    second_failure = login_user(client, "throttled-login@example.com", "WrongPassword1!")
+    throttled_response = login_user(client, "throttled-login@example.com", "WrongPassword1!")
+
+    assert register_response.status_code == 201
+    assert first_failure.status_code == 401
+    assert second_failure.status_code == 401
+    assert throttled_response.status_code == 429
+    assert throttled_response.json() == {
+        "detail": "Too many failed login attempts",
+        "limit": 2,
+        "window_seconds": 60,
+    }
+
+
+def test_successful_login_clears_prior_failed_login_attempts(client, monkeypatch):
+    from app.auth import routes as auth_routes
+    from app.auth.rate_limit import LoginAttemptLimiter
+
+    monkeypatch.setattr(
+        auth_routes,
+        "login_attempt_limiter",
+        LoginAttemptLimiter(max_attempts=2, window_seconds=60),
+    )
+
+    register_response = register_user(client, "cleared-login@example.com")
+    first_failure = login_user(client, "cleared-login@example.com", "WrongPassword1!")
+    successful_login = login_user(client, "cleared-login@example.com")
+    second_failure = login_user(client, "cleared-login@example.com", "WrongPassword1!")
+
+    assert register_response.status_code == 201
+    assert first_failure.status_code == 401
+    assert successful_login.status_code == 200
+    assert second_failure.status_code == 401
 
 
 def test_register_login_and_get_current_user(client):
