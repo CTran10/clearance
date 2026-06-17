@@ -517,7 +517,18 @@ This project uses Alembic for repeatable schema changes:
 .venv/bin/alembic upgrade head
 ```
 
-`AUTO_CREATE_TABLES=true` is still convenient for the local learning loop with a fresh database. For production-like environments, use migrations instead.
+For a new schema change, update the model, generate a reviewed revision, and
+apply it locally:
+
+```bash
+.venv/bin/alembic revision --autogenerate -m "describe schema change"
+.venv/bin/alembic upgrade head
+```
+
+`AUTO_CREATE_TABLES=true` is still convenient for the local learning loop with a
+fresh database. For production-like environments, use migrations instead. See
+[Deployment notes](docs/deployment.md) for the full migration and rollback
+workflow.
 
 ## More Documentation
 

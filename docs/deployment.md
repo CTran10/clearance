@@ -39,7 +39,43 @@ Schema changes should be applied with Alembic:
 alembic upgrade head
 ```
 
-For local development with a fresh database, `AUTO_CREATE_TABLES=true` is convenient. For production-like environments, migrations are the safer source of truth.
+For local development with a fresh database, `AUTO_CREATE_TABLES=true` is convenient.
+For production-like environments, migrations are the safer source of truth.
+
+Use this workflow for schema changes:
+
+1. Update the SQLAlchemy model.
+2. Generate a revision with a clear message:
+
+   ```bash
+   alembic revision --autogenerate -m "describe schema change"
+   ```
+
+3. Review the generated migration before applying it. Confirm indexes,
+   constraints, nullable changes, server defaults, and downgrade behavior are
+   intentional.
+4. Apply the migration locally:
+
+   ```bash
+   alembic upgrade head
+   ```
+
+5. Run the relevant pytest target against the migrated schema. For
+   database-critical behavior, include the Postgres integration tests.
+6. Before production rollout, apply the same migration command in a staging or
+   production-like environment and confirm the app starts with
+   `AUTO_CREATE_TABLES=false`.
+
+For rollbacks during development or rehearsed release recovery, use Alembic's
+relative downgrade form:
+
+```bash
+alembic downgrade -1
+```
+
+Destructive migrations should be split into safe rollout steps when practical:
+add nullable structures first, backfill idempotently, switch application reads or
+writes, then tighten constraints in a later migration.
 
 ## Running The App
 

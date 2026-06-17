@@ -52,7 +52,6 @@ Future path: store a canonical request hash with the idempotency key so comparis
 
 ## Current Next Steps
 
-- Add richer Alembic migration workflow docs as the schema evolves.
 - Add Postgres-backed concurrency tests around idempotency.
 - Add CI status badge once the GitHub repo is connected.
 - Add a small admin or rule-management surface after core backend guarantees are stable.
