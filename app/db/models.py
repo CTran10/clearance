@@ -97,6 +97,7 @@ class Transaction(Base):
     risk_score: Mapped[int] = mapped_column(Integer, nullable=False)
     decision_reason: Mapped[str] = mapped_column(String(500), nullable=False)
     idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    idempotency_request_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

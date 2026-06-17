@@ -44,14 +44,15 @@ Future path: add issuer/audience claims, token versioning, refresh tokens, and t
 
 ## Idempotency Payload Comparison
 
-The app currently compares important transaction fields when an idempotency key is reused.
+The app stores a canonical request hash when an idempotency key is first used,
+then compares that hash on retries.
 
-Tradeoff: as request bodies become richer, field-by-field comparisons become easier to miss.
+Tradeoff: rows created before request hashes existed still need a compatibility
+fallback.
 
-Future path: store a canonical request hash with the idempotency key so comparison stays complete and explicit.
+Future path: remove the fallback after old rows have been backfilled or aged out.
 
 ## Current Next Steps
 
-- Add Postgres-backed concurrency tests around idempotency.
 - Add CI status badge once the GitHub repo is connected.
 - Add a small admin or rule-management surface after core backend guarantees are stable.

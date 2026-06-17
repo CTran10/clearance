@@ -1,3 +1,9 @@
+from decimal import Decimal
+
+from app.db.models import Transaction
+from app.db.session import SessionLocal
+from app.transactions.schemas import TransactionCreateRequest
+from app.transactions.service import build_idempotency_request_hash
 from tests.helpers import auth_headers, create_merchant, register_and_login
 
 
@@ -31,6 +37,55 @@ def test_transaction_creation_is_idempotent_for_same_payload(client):
     assert retry_response.json()["id"] == first_response.json()["id"]
     assert retry_response.json()["currency"] == "USD"
     assert "idempotency_key" not in first_response.json()
+
+
+def test_transaction_creation_stores_canonical_idempotency_request_hash(client):
+    token = register_and_login(client, "idempotency-hash@example.com")
+    merchant = create_merchant(client, token)
+    payload = {"merchant_id": merchant["id"], "amount": "42.00", "currency": "usd"}
+
+    response = client.post(
+        "/transactions",
+        headers=auth_headers(token, **{"Idempotency-Key": "txn-key-hash"}),
+        json=payload,
+    )
+
+    assert response.status_code == 201
+    assert "idempotency_request_hash" not in response.json()
+
+    db = SessionLocal()
+    try:
+        transaction = (
+            db.query(Transaction)
+            .filter(Transaction.id == response.json()["id"])
+            .one()
+        )
+        expected_hash = build_idempotency_request_hash(
+            TransactionCreateRequest(
+                merchant_id=merchant["id"],
+                amount=Decimal("42.00"),
+                currency="USD",
+            )
+        )
+        assert transaction.idempotency_request_hash == expected_hash
+        assert len(transaction.idempotency_request_hash) == 64
+    finally:
+        db.close()
+
+
+def test_idempotency_request_hash_uses_canonical_payload_values():
+    first_hash = build_idempotency_request_hash(
+        TransactionCreateRequest(merchant_id=1, amount=Decimal("42.0"), currency="usd")
+    )
+    matching_hash = build_idempotency_request_hash(
+        TransactionCreateRequest(merchant_id=1, amount=Decimal("42.00"), currency="USD")
+    )
+    different_hash = build_idempotency_request_hash(
+        TransactionCreateRequest(merchant_id=1, amount=Decimal("42.01"), currency="USD")
+    )
+
+    assert first_hash == matching_hash
+    assert first_hash != different_hash
 
 
 def test_reusing_idempotency_key_with_different_payload_returns_conflict(client):

@@ -434,12 +434,12 @@ What is in place:
 - `unique(user_id, idempotency_key)` database constraint
 - same-key/same-payload retry returns the original transaction
 - same-key/different-payload retry returns `409 Conflict`
+- canonical request hashes are stored for stronger payload comparison
 - idempotency keys are stored but not exposed in API responses
 
 Next improvements:
 
-- add Postgres-backed concurrency tests
-- consider storing a canonical request hash for stronger payload comparison
+- add broader Postgres-backed idempotency tests as new retry cases appear
 
 ### 6. Add Audit Logs
 
