@@ -398,11 +398,11 @@ What is in place:
 - untrusted merchant review
 - non-USD currency review
 - recent-transaction velocity review
+- risk thresholds, high-risk categories, and velocity windows are configurable
 - risk score and decision reason stored on each transaction
 
 Next improvements:
 
-- make risk rules configurable instead of hardcoded
 - add per-merchant and per-user velocity windows
 - add tests for concurrent transaction creation/race conditions
 
@@ -560,7 +560,7 @@ workflow.
 - Reusing an idempotency key with a different payload returns `409 Conflict`.
 - Idempotency keys are stored for request safety but are not returned in transaction responses.
 - Audit events record important auth, merchant, and transaction actions.
-- Risk decisions now consider amount, merchant category, merchant trust status, currency, and recent transaction velocity.
+- Risk decisions now consider configurable amount thresholds, merchant category, merchant trust status, currency, and recent transaction velocity.
 - Rate limiting is currently in-memory and intended for local/single-process development.
 - Rate limiting does not trust proxy headers unless `TRUST_PROXY_HEADERS=true` and the direct client IP is inside `TRUSTED_PROXY_CIDRS`.
 - Incoming `X-Request-ID` values are validated before they are logged or echoed.

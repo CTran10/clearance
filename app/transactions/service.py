@@ -10,8 +10,9 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.audit.service import create_audit_event
+from app.core.config import settings
 from app.db.models import Merchant, Transaction, User
-from app.transactions.risk import VELOCITY_WINDOW_SECONDS, evaluate_transaction
+from app.transactions.risk import build_risk_rules, evaluate_transaction
 from app.transactions.schemas import TransactionCreateRequest
 
 IDEMPOTENCY_KEY_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
@@ -46,7 +47,7 @@ def create_transaction_with_idempotency(
     recent_transaction_count = count_recent_transactions_for_user(
         db,
         user_id=user.id,
-        window_seconds=VELOCITY_WINDOW_SECONDS,
+        window_seconds=settings.risk_velocity_window_seconds,
     )
     transaction = build_transaction(
         user=user,
@@ -208,6 +209,7 @@ def build_transaction(
         currency=payload.currency,
         merchant=merchant,
         recent_transaction_count=recent_transaction_count,
+        risk_rules=build_risk_rules(settings),
     )
 
     return Transaction(

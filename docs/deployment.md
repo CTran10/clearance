@@ -13,6 +13,11 @@ ACCESS_TOKEN_EXPIRE_SECONDS=1800
 CORS_ORIGINS=https://your-frontend.example.com
 RATE_LIMIT_MAX_REQUESTS=120
 RATE_LIMIT_WINDOW_SECONDS=60
+RISK_REVIEW_AMOUNT_THRESHOLD=5000.00
+RISK_DECLINE_AMOUNT_THRESHOLD=10000.00
+RISK_HIGH_RISK_CATEGORIES=crypto,gambling,wire_transfer
+RISK_VELOCITY_REVIEW_THRESHOLD=5
+RISK_VELOCITY_WINDOW_SECONDS=60
 TRUST_PROXY_HEADERS=false
 TRUSTED_PROXY_CIDRS=
 ENABLE_DOCS=false
@@ -30,6 +35,7 @@ Use these production-leaning defaults:
 - explicit `CORS_ORIGINS`
 - TLS terminated by a trusted proxy/load balancer
 - `TRUST_PROXY_HEADERS=true` only when `TRUSTED_PROXY_CIDRS` is configured
+- explicit risk thresholds and high-risk merchant categories for each environment
 
 ## Database Migrations
 

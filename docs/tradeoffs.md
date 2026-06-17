@@ -10,13 +10,16 @@ Tradeoff: a monolith can become crowded as the product grows.
 
 Future path: split only when there is pressure from scale, ownership, deployment cadence, or failure isolation.
 
-## Hardcoded Risk Rules
+## Settings-Backed Risk Rules
 
-Risk rules currently live in Python code. That makes them easy to read, test, and change while the product model is still evolving.
+Risk rules currently use environment-backed settings for amount thresholds,
+high-risk categories, and velocity review limits. That keeps deployment simple
+while the product model is still evolving.
 
-Tradeoff: changing rules requires a code deploy.
+Tradeoff: changing rules still requires a config change and app restart.
 
-Future path: move thresholds and rule configuration into a database-backed policy table or a small rules engine once the rule set becomes dynamic.
+Future path: move rule configuration into a database-backed policy table or a
+small rules engine once non-engineers need live rule management.
 
 ## In-Memory Rate Limiting
 

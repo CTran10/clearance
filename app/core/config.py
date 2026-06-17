@@ -1,5 +1,6 @@
 import os
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 
 from dotenv import load_dotenv
 
@@ -24,6 +25,22 @@ def _get_positive_int_env(name: str, default: int) -> int:
         parsed_value = int(value)
     except ValueError as exc:
         raise RuntimeError(f"{name} must be an integer") from exc
+
+    if parsed_value <= 0:
+        raise RuntimeError(f"{name} must be greater than 0")
+
+    return parsed_value
+
+
+def _get_positive_decimal_env(name: str, default: str) -> Decimal:
+    value = os.getenv(name, default)
+    try:
+        parsed_value = Decimal(value)
+    except InvalidOperation as exc:
+        raise RuntimeError(f"{name} must be a decimal value") from exc
+
+    if not parsed_value.is_finite():
+        raise RuntimeError(f"{name} must be a decimal value")
 
     if parsed_value <= 0:
         raise RuntimeError(f"{name} must be greater than 0")
@@ -71,6 +88,11 @@ class Settings:
     enable_docs: bool
     max_request_body_bytes: int
     auto_create_tables: bool
+    risk_review_amount_threshold: Decimal
+    risk_decline_amount_threshold: Decimal
+    risk_high_risk_categories: list[str]
+    risk_velocity_review_threshold: int
+    risk_velocity_window_seconds: int
 
 
 settings = Settings(
@@ -85,4 +107,16 @@ settings = Settings(
     enable_docs=_get_bool_env("ENABLE_DOCS", False),
     max_request_body_bytes=_get_positive_int_env("MAX_REQUEST_BODY_BYTES", 1_048_576),
     auto_create_tables=_get_bool_env("AUTO_CREATE_TABLES", False),
+    risk_review_amount_threshold=_get_positive_decimal_env(
+        "RISK_REVIEW_AMOUNT_THRESHOLD",
+        "5000.00",
+    ),
+    risk_decline_amount_threshold=_get_positive_decimal_env(
+        "RISK_DECLINE_AMOUNT_THRESHOLD",
+        "10000.00",
+    ),
+    risk_high_risk_categories=_get_csv_env("RISK_HIGH_RISK_CATEGORIES")
+    or ["crypto", "gambling", "wire_transfer"],
+    risk_velocity_review_threshold=_get_positive_int_env("RISK_VELOCITY_REVIEW_THRESHOLD", 5),
+    risk_velocity_window_seconds=_get_positive_int_env("RISK_VELOCITY_WINDOW_SECONDS", 60),
 )
