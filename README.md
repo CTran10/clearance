@@ -1,157 +1,215 @@
 # Clearance
 
-Clearance is a FastAPI backend project I am building to refine / build on the foundation of my backend engineering skills by building the system piece by piece.
+[![CI](https://github.com/CTran10/clearance/actions/workflows/ci.yml/badge.svg)](https://github.com/CTran10/clearance/actions/workflows/ci.yml)
 
-The product idea is a transaction authorization platform. Clients submit transaction requests, and Clearance eventually decides whether each transaction should be approved, declined, or sent to review based on users, merchants, amount, request history, and risk rules.
+Clearance is a backend-focused portfolio project for a transaction authorization
+platform. It models the kind of system a payments, risk, fintech, or internal
+platform team might build: authenticated clients submit transactions, the API
+evaluates risk rules, stores an authorization decision, enforces idempotent
+retries, and records audit history.
 
-The goal is not just to make a CRUD app. The goal is to build something that shows backend fundamentals clearly:
+The project is intentionally more than CRUD. It is built to demonstrate backend
+engineering fundamentals that matter in production-style systems: durable
+storage, API contracts, authentication, authorization boundaries, database
+constraints, idempotency, migrations, observability, verification, and explicit
+tradeoffs.
 
-- authentication
-- API contracts
-- durable storage
-- database constraints
-- idempotency
-- audit logs
-- risk decisions
-- observability
+![Clearance operator console](docs/assets/clearance-operator-console.png)
 
-## Current Status
+## What This Demonstrates
 
-I am currently building out the product domain and production-style backend behaviors.
+- FastAPI service design with thin routes and service-layer domain logic.
+- JWT authentication with issuer, audience, expiration, and deleted-user checks.
+- User-owned resource scoping for merchants, transactions, and audit events.
+- Idempotent transaction creation with `Idempotency-Key` and canonical request hashes.
+- Risk decisions for amount thresholds, merchant trust, category, currency, and velocity.
+- Audit logs for registration, login, merchant creation, and authorization decisions.
+- Alembic migrations as the production-style schema authority.
+- SQLite-backed fast tests plus optional Postgres integration tests for database-specific behavior.
+- CI coverage, Ruff linting/format checks, frontend tests, and a live API smoke test.
+- A small dependency-free operator console that makes the backend behavior visible.
 
-Completed so far:
+## Product Slice
 
-- FastAPI app setup
-- modular route structure
+The current slice supports:
+
 - `POST /auth/register`
 - `POST /auth/login`
 - `GET /users/me`
-- password hashing
-- JWT access tokens
-- protected route dependency
-- Pydantic request models
-- Pydantic response models
-- Dockerized local Postgres
-- SQLAlchemy engine/session setup
-- `User` database model
-- `users` table
-- `Merchant` database model
-- `Transaction` database model
-- `AuditEvent` database model
 - `POST /merchants`
 - `GET /merchants`
 - `POST /transactions`
 - `GET /transactions`
 - `GET /transactions/{id}`
 - `GET /audit-events`
-- idempotent transaction creation with `Idempotency-Key`
-- basic risk decisions: `approved`, `declined`, `review`
-- merchant trust status
-- velocity-based transaction review
-- audit event creation
-- request IDs
-- request logging
-- rate limiting
-- CORS configuration
-- basic security headers
-- pytest-based API tests
-- dependency manifests for runtime and test setup
+- `GET /health`
+- `GET /health/db`
 
-The important shift has been moving from memory-stored user dicts to Postgres-backed records and then layering real system behavior on top of that.
+Transaction submission requires an `Idempotency-Key`. A retry with the same key
+and same payload returns the original transaction. Reusing the same key with a
+different payload returns `409 Conflict`.
 
-Memory is runtime state. A database is durable state.
+## Architecture
+
+Clearance is a modular monolith: one deployable FastAPI service organized by
+domain boundary.
+
+```txt
+Client / Console
+  -> FastAPI middleware
+     -> auth routes
+     -> merchant routes
+     -> transaction routes
+        -> risk rules
+        -> idempotency checks
+        -> audit writes
+     -> audit routes
+  -> SQLAlchemy
+  -> Postgres in production-like environments
+```
+
+The detailed diagrams and request flows live in
+[docs/architecture.md](docs/architecture.md).
 
 ## Stack
 
-- FastAPI for HTTP routes and request/response handling
-- Pydantic for request validation and response schemas
-- SQLAlchemy for database models, sessions, and queries
-- psycopg for speaking to Postgres
+- FastAPI for HTTP routing and request handling
+- Pydantic for request and response contracts
+- SQLAlchemy for ORM models and database sessions
+- Alembic for migrations
 - Postgres for durable storage
-- Docker Compose for local database setup
-- passlib/bcrypt for password hashing
-- JWT for signed access tokens
-- in-memory rate limiting for local API protection
-- request middleware for IDs, logs, and security headers
-- pytest and httpx for API-level verification
+- Docker Compose for local Postgres
+- passlib with `bcrypt_sha256` for password hashing
+- python-jose for JWT signing and verification
+- pytest, coverage, httpx, and Ruff for verification
+- Dependency-free HTML/CSS/JavaScript frontend console
 
-## Local Setup
+## Quick Start
 
-Install runtime dependencies:
-
-```bash
-.venv/bin/python -m pip install -r requirements.txt
-```
-
-Install runtime plus test dependencies:
+Install dependencies:
 
 ```bash
 .venv/bin/python -m pip install -r requirements-dev.txt
 ```
 
-## Local Database Setup
+Create a local `.env` from `.env.example`, then replace the placeholder
+`SECRET_KEY` and local database password values.
 
-```txt
-Docker container port: 5432
-Mac host port: 5433 (local homebrew postgres was using port 5432, so i'm hosting my docker postgres container on 5433)
-DATABASE_URL: postgresql+psycopg://clearance:YOUR_LOCAL_PASSWORD@localhost:5433/clearance
-```
-
-The Compose database is bound to `127.0.0.1`, so it is reachable from this machine without exposing Postgres on every network interface.
-
-Start Postgres:
-
-```bash
-docker compose up -d
-```
-
-Verify the container database:
-
-```bash
-docker exec clearance-postgres psql -U clearance -d clearance -c "select current_user, current_database();"
-```
-
-List tables:
-
-```bash
-docker exec clearance-postgres psql -U clearance -d clearance -c "\dt"
-```
-
-## Running The API
-
-Create a local `.env` from `.env.example`, set a real `SECRET_KEY`, and use the same local Postgres password in both `POSTGRES_PASSWORD` and `DATABASE_URL`. The app intentionally fails startup if `SECRET_KEY` is missing, too short, or still set to a placeholder.
-
-You can generate a local development secret with:
+Generate a development secret:
 
 ```bash
 python -c "import secrets; print(secrets.token_urlsafe(32))"
 ```
 
-Start the FastAPI app:
+Start Postgres:
 
 ```bash
-.venv/bin/uvicorn app.main:app --reload
+make db-up
 ```
 
-For local development, `.env.example` sets:
+Apply migrations:
 
-```env
-AUTO_CREATE_TABLES=true
-ENABLE_DOCS=true
+```bash
+.venv/bin/alembic upgrade head
 ```
 
-For a production-style deployment, schema changes should be handled by migrations instead of automatic table creation, and API docs can be disabled with:
+Run the API:
 
-```env
-AUTO_CREATE_TABLES=false
-ENABLE_DOCS=false
+```bash
+make run
 ```
 
-Health check:
+Open API health:
 
 ```bash
 curl -i http://127.0.0.1:8000/health
+curl -i http://127.0.0.1:8000/health/db
 ```
+
+## Operator Console
+
+The frontend is a thin local console for portfolio review and manual testing. It
+is not trying to be a second full application.
+
+Start the API, then serve the console:
+
+```bash
+cd frontend
+python3 -m http.server 5173
+```
+
+Open:
+
+```txt
+http://127.0.0.1:5173
+```
+
+If browser requests are blocked by CORS, include the console origin in `.env`:
+
+```env
+CORS_ORIGINS=http://127.0.0.1:5173,http://localhost:5173
+```
+
+The console can register/login, create merchants, submit transactions, retry an
+idempotency key, and inspect decisions and audit events.
+
+## Verification
+
+Run the same checks locally that CI is expected to enforce:
+
+```bash
+make lint
+make coverage
+make frontend-test
+```
+
+Run the live API smoke test after the API is running:
+
+```bash
+make smoke
+```
+
+The smoke test exercises the system through HTTP:
+
+1. Health and database readiness.
+2. Register and login.
+3. Create trusted and untrusted merchants.
+4. Create an approved transaction.
+5. Retry the same idempotency key and confirm the original transaction returns.
+6. Reuse the key with a different payload and confirm `409 Conflict`.
+7. Create review and declined decisions.
+8. Confirm audit events were recorded.
+
+Current local verification from this repo state:
+
+- Backend tests: `48 passed, 5 skipped`
+- Coverage: `92%`
+- Frontend tests: `7 passed`
+- Live API smoke test: passing
+
+The skipped tests are Postgres integration tests when
+`POSTGRES_INTEGRATION_DATABASE_URL` is not set locally. CI provides Postgres and
+runs those integration tests.
+
+## CI
+
+GitHub Actions runs:
+
+```bash
+python -m ruff check .
+python -m ruff format --check .
+python -m alembic upgrade head
+python -m coverage run -m pytest
+python -m coverage report
+python scripts/smoke_api.py
+npm test
+```
+
+The CI job starts a Postgres service, applies migrations, runs database-aware
+tests, starts the API locally, then runs the smoke workflow against the live
+server.
+
+## API Walkthrough
 
 Register:
 
@@ -169,13 +227,6 @@ curl -i -X POST http://127.0.0.1:8000/auth/login \
   -d '{"email":"calvin@example.com","password":"Password1!"}'
 ```
 
-Use the returned token:
-
-```bash
-curl -i http://127.0.0.1:8000/users/me \
-  -H "Authorization: Bearer PASTE_TOKEN_HERE"
-```
-
 Create a merchant:
 
 ```bash
@@ -183,13 +234,6 @@ curl -i -X POST http://127.0.0.1:8000/merchants \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer PASTE_TOKEN_HERE" \
   -d '{"name":"Summit Coffee","category":"food","trust_status":"trusted"}'
-```
-
-List merchants:
-
-```bash
-curl -i http://127.0.0.1:8000/merchants \
-  -H "Authorization: Bearer PASTE_TOKEN_HERE"
 ```
 
 Create a transaction:
@@ -202,9 +246,9 @@ curl -i -X POST http://127.0.0.1:8000/transactions \
   -d '{"merchant_id":1,"amount":"125.50","currency":"USD"}'
 ```
 
-Retry the same transaction request with the same `Idempotency-Key`. The API should return the original transaction instead of creating a duplicate.
-
-If the same `Idempotency-Key` is reused with a different payload, the API returns `409 Conflict`.
+Retry the same transaction request with the same `Idempotency-Key` to see the
+safe retry path. Reuse the same key with a different payload to see the conflict
+path.
 
 List audit events:
 
@@ -213,362 +257,86 @@ curl -i http://127.0.0.1:8000/audit-events \
   -H "Authorization: Bearer PASTE_TOKEN_HERE"
 ```
 
-## Running Tests
+## Security And Reliability Notes
 
-Run the backend test suite:
+- Passwords are stored as hashes, not raw passwords.
+- New password hashes use `bcrypt_sha256` to avoid raw bcrypt's 72-byte password limit.
+- JWTs include issuer, audience, issued-at, and expiration claims.
+- `SECRET_KEY` is required at startup and cannot use the placeholder value.
+- Protected routes resolve the current user server-side.
+- User-owned resources are filtered by `current_user.id`.
+- Unknown request fields are rejected.
+- Request bodies over `MAX_REQUEST_BODY_BYTES` are rejected while streaming.
+- CORS origins are configured by environment.
+- Request IDs are validated before being logged or echoed.
+- Basic security headers and `Cache-Control: no-store` are added by middleware.
+- Rate limiting is in-memory by design for the current single-process scope.
+- Proxy headers are ignored unless explicitly trusted through CIDR configuration.
+
+## Migrations
+
+Run migrations:
 
 ```bash
-.venv/bin/python -m pytest
+.venv/bin/alembic upgrade head
 ```
 
-Run tests with coverage:
+Generate a new migration after changing models:
 
 ```bash
-.venv/bin/python -m coverage run -m pytest
-.venv/bin/python -m coverage report
+.venv/bin/alembic revision --autogenerate -m "describe schema change"
 ```
 
-The tests use a throwaway SQLite database in a temporary directory. That keeps the feedback loop fast and means the tests do not need Docker or local Postgres to be running.
-
-Optional Postgres integration tests run when `POSTGRES_INTEGRATION_DATABASE_URL` is set:
-
-```bash
-POSTGRES_INTEGRATION_DATABASE_URL=postgresql+psycopg://clearance:YOUR_LOCAL_PASSWORD@localhost:5433/clearance \
-  .venv/bin/python -m pytest tests/integration
-```
-
-The integration tests create a temporary Postgres schema and drop it after the run.
+For production-like environments, keep `AUTO_CREATE_TABLES=false` and use
+Alembic as the schema authority. See [docs/deployment.md](docs/deployment.md)
+for rollout and rollback notes.
 
 ## Project Structure
 
 ```txt
 app/
-  main.py
   auth/
-    routes.py
-    schemas.py
-    service.py
-  core/
-    config.py
-    request_context.py
-    security.py
-  db/
-    dependencies.py
-    models.py
-    session.py
   audit/
-    routes.py
-    schemas.py
-    service.py
+  core/
+  db/
   merchants/
-    routes.py
-    schemas.py
-    service.py
-  transactions/
-    routes.py
-    schemas.py
-    risk.py
-    service.py
   middleware/
-    rate_limit.py
-    request_logging.py
-    security_headers.py
+  transactions/
   users/
-    dependencies.py
-    routes.py
-    schemas.py
-docker-compose.yml
-requirements.txt
-requirements-dev.txt
-alembic.ini
-migrations/
 docs/
-.github/workflows/ci.yml
+frontend/
+migrations/
+scripts/
 tests/
 ```
 
-The idea behind the structure:
+Key files:
 
-- `main.py` wires the app together.
-- route files own HTTP endpoints.
-- schema files own request and response contracts.
-- service files own reusable domain/application logic.
-- `core/security.py` owns password hashing and JWT helpers.
-- `core/config.py` owns environment-backed runtime configuration.
-- `core/request_context.py` owns shared request metadata helpers.
-- `db/session.py` owns the SQLAlchemy engine/session setup.
-- `db/dependencies.py` gives routes request-scoped DB sessions.
-- `db/models.py` defines database tables.
-- `audit/service.py` writes audit events.
-- `transactions/risk.py` owns the first version of the decision logic.
-- middleware owns request-level cross-cutting behavior.
-- tests exercise API behavior and security boundaries from the outside.
+- `app/main.py` wires the application.
+- `app/core/config.py` owns environment-backed settings.
+- `app/core/security.py` owns password hashing and JWT helpers.
+- `app/transactions/service.py` owns transaction creation and idempotency behavior.
+- `app/transactions/risk.py` owns authorization decision rules.
+- `scripts/smoke_api.py` verifies the live HTTP workflow.
+- `frontend/` contains the local operator console.
 
-## Roadmap
+## Tradeoffs
 
-Current milestone: Clearance has a working authenticated transaction domain with persistent storage, idempotent transaction creation, audit events, risk decisions, security middleware, Alembic migrations, CI, and a pytest/coverage verification loop. The next major step is making risk rules configurable and adding deeper Postgres/concurrency coverage.
+This project is intentionally production-style, not production-complete.
 
-### 1. Finish Auth Foundation
+- It starts as a modular monolith instead of premature microservices.
+- Risk rules are environment-backed until the domain needs live rule management.
+- Rate limiting is in-memory until there is multi-instance pressure.
+- Fast tests use SQLite, while Postgres-specific behavior is covered separately.
+- The frontend is a demo console, not a full product surface.
+- Deployment is documented, but this repo currently focuses on local and CI evidence.
 
-- Clean response casing.
-- Add JWT access tokens.
-- Add `GET /users/me`.
-- Add protected route dependencies.
-- Add response models.
-- Refactor auth/security code out of `main.py`.
+More detail lives in [docs/tradeoffs.md](docs/tradeoffs.md).
 
-Status: complete
-
-What is in place:
-
-- registration and login routes
-- normalized email lookup
-- password hashing with `bcrypt_sha256`
-- signed JWT access tokens
-- protected `GET /users/me`
-- current-user dependency
-- request/response schemas
-- basic login timing hardening for missing users
-
-### 2. Move From Memory To Postgres
-
-- Replace `users = []` with database storage.
-- Add a `users` table.
-- Add a unique email constraint.
-- Store password hashes only.
-- Add created/updated timestamps.
-- Query users by indexed email instead of scanning a list.
-
-Status: complete
-
-What is in place:
-
-- SQLAlchemy engine/session setup
-- Postgres-backed `User` model
-- unique/indexed email
-- created/updated timestamps
-- Docker Compose local Postgres
-- environment-backed `DATABASE_URL`
-- Alembic migration setup for repeatable schema changes
-
-### 3. Add Merchant And Transaction Domain
-
-- `POST /merchants`
-- `GET /merchants`
-- `POST /transactions`
-- `GET /transactions`
-- `GET /transactions/{id}`
-
-This is where the app starts becoming the actual product instead of only auth.
-
-Status: complete
-
-What is in place:
-
-- user-owned merchants
-- merchant categories
-- merchant trust status
-- transaction creation
-- transaction listing/detail lookup
-- ownership scoping so users cannot read or transact against another user's resources
-- bounded list endpoints
-
-### 4. Add Authorization Decisions
-
-Supported decisions:
-
-- `approved`
-- `declined`
-- `review`
-
-Initial risk rules:
-
-- high amount transactions go to review
-- very high amount transactions are declined
-- too many transactions in a short time window go to review
-- untrusted merchants go to review
-
-Status: current product slice complete
-
-What is in place:
-
-- amount-based review threshold
-- amount-based decline threshold
-- high-risk merchant category review
-- untrusted merchant review
-- non-USD currency review
-- recent-transaction velocity review
-- risk thresholds, high-risk categories, and velocity windows are configurable
-- risk score and decision reason stored on each transaction
-
-Next improvements:
-
-- add per-merchant and per-user velocity windows
-- add tests for concurrent transaction creation/race conditions
-
-### 5. Add Idempotency
-
-Support:
-
-```http
-POST /transactions
-Idempotency-Key: abc-123
-```
-
-If the client retries the same request with the same idempotency key, Clearance should return the original result instead of creating a duplicate transaction.
-
-Postgres constraint idea:
-
-```txt
-unique(user_id, idempotency_key)
-```
-
-This is one of the main SWE II-level features of the project.
-
-Status: complete
-
-What is in place:
-
-- required `Idempotency-Key` header
-- safe key format validation
-- `unique(user_id, idempotency_key)` database constraint
-- same-key/same-payload retry returns the original transaction
-- same-key/different-payload retry returns `409 Conflict`
-- canonical request hashes are stored for stronger payload comparison
-- idempotency keys are stored but not exposed in API responses
-
-Next improvements:
-
-- add broader Postgres-backed idempotency tests as new retry cases appear
-
-### 6. Add Audit Logs
-
-Record important events:
-
-- `REGISTERED_USER`
-- `LOGGED_IN`
-- `CREATED_MERCHANT`
-- `TRANSACTION_APPROVED`
-- `TRANSACTION_DECLINED`
-- `TRANSACTION_REVIEW`
-
-The point is traceability: who did what, when, and why.
-
-Status: complete
-
-What is in place:
-
-- `AuditEvent` model
-- audit writes for registration, login, merchant creation, and transaction decisions
-- request ID attached to audit events when available
-- metadata JSON for transaction decision context
-- protected `GET /audit-events`
-
-Next improvements:
-
-- add richer filtering by action/entity/date
-- split audit metadata into typed columns if query patterns justify it
-
-### 7. Add Production Polish
-
-- request IDs
-- structured request logging
-- request timing
-- CORS
-- tests
-- Docker Compose polish
-- architecture diagram
-- API examples
-- tradeoffs and future work
-
-Status: in progress
-
-What is in place:
-
-- request IDs
-- request logging with timing
-- security headers
-- request body size limits enforced on the request stream
-- in-memory rate limiting
-- trusted-proxy guard for `X-Forwarded-For`
-- CORS config through environment variables
-- strict env parsing for security-sensitive config
-- dependency manifests
-- Docker Compose local Postgres polish
-- pytest API suite
-- optional Postgres integration tests
-- GitHub Actions CI
-- coverage gate at 80%
-- current coverage around 91%
-- architecture, tradeoffs, and deployment docs
-
-Next improvements:
-
-- Redis/shared-store rate limiting for multi-instance deployments
-- login-specific throttling
-- CI badge once the GitHub repo is connected
-- richer Postgres concurrency tests
-
-## Migrations
-
-This project uses Alembic for repeatable schema changes:
-
-```bash
-.venv/bin/alembic upgrade head
-```
-
-For a new schema change, update the model, generate a reviewed revision, and
-apply it locally:
-
-```bash
-.venv/bin/alembic revision --autogenerate -m "describe schema change"
-.venv/bin/alembic upgrade head
-```
-
-`AUTO_CREATE_TABLES=true` is still convenient for the local learning loop with a
-fresh database. For production-like environments, use migrations instead. See
-[Deployment notes](docs/deployment.md) for the full migration and rollback
-workflow.
-
-## More Documentation
+## Documentation
 
 - [Architecture](docs/architecture.md)
 - [Tradeoffs and future work](docs/tradeoffs.md)
 - [Deployment notes](docs/deployment.md)
+- [Frontend console](frontend/README.md)
 
-## Security And Reliability Notes
-
-- Passwords are stored as hashes, not raw passwords.
-- New password hashes use `bcrypt_sha256` to avoid raw bcrypt's 72-byte password limit.
-- JWTs are signed and verified server-side.
-- `SECRET_KEY` is required at startup and must not be a placeholder.
-- Runtime configuration is centralized in `app/core/config.py`.
-- `DATABASE_URL` and `SECRET_KEY` are required environment values.
-- Protected routes use the current-user dependency.
-- User-owned resources are filtered by `current_user.id`.
-- SQLAlchemy ORM queries are used instead of string-built SQL, so user input is bound as parameters rather than interpolated into SQL strings.
-- Emails are normalized before lookup/storage.
-- Merchant fields reject blank/control-character input, and categories are constrained to a safe character set.
-- Merchant trust status is constrained to `trusted` or `untrusted`.
-- Transaction currencies must be three letters and are normalized to uppercase.
-- Bearer tokens and idempotency keys have explicit length/format checks.
-- Request bodies over the configured `MAX_REQUEST_BODY_BYTES` are rejected.
-- Request body size is enforced while the app reads the request stream, not only from `Content-Length`.
-- Duplicate email is protected by both app logic and a database unique constraint.
-- Transaction creation requires an `Idempotency-Key`.
-- Duplicate transaction retries return the original result.
-- Reusing an idempotency key with a different payload returns `409 Conflict`.
-- Idempotency keys are stored for request safety but are not returned in transaction responses.
-- Audit events record important auth, merchant, and transaction actions.
-- Risk decisions now consider configurable amount thresholds, merchant category, merchant trust status, currency, and recent transaction velocity.
-- Rate limiting is currently in-memory and intended for local/single-process development.
-- Rate limiting does not trust proxy headers unless `TRUST_PROXY_HEADERS=true` and the direct client IP is inside `TRUSTED_PROXY_CIDRS`.
-- Incoming `X-Request-ID` values are validated before they are logged or echoed.
-- Unknown request fields are rejected instead of silently ignored.
-- CORS origins are configured through environment variables.
-- Basic security headers and `Cache-Control: no-store` are added by middleware.
-- API tests cover auth, resource ownership, idempotency, validation, request IDs, body size limits, and rate limiting behavior.
-
-## Architecture Direction
-
-Clearance starts as a modular monolith. I want the code organized by responsibility without pretending it needs microservices before the domain is mature.

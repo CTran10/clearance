@@ -10,9 +10,13 @@ The app fails startup if required config is missing or unsafe.
 DATABASE_URL=postgresql+psycopg://USER:PASSWORD@HOST:5432/DATABASE
 SECRET_KEY=replace-with-a-real-random-secret
 ACCESS_TOKEN_EXPIRE_SECONDS=1800
+JWT_ISSUER=clearance-api
+JWT_AUDIENCE=clearance-clients
 CORS_ORIGINS=https://your-frontend.example.com
 RATE_LIMIT_MAX_REQUESTS=120
 RATE_LIMIT_WINDOW_SECONDS=60
+LOGIN_RATE_LIMIT_MAX_ATTEMPTS=5
+LOGIN_RATE_LIMIT_WINDOW_SECONDS=300
 RISK_REVIEW_AMOUNT_THRESHOLD=5000.00
 RISK_DECLINE_AMOUNT_THRESHOLD=10000.00
 RISK_HIGH_RISK_CATEGORIES=crypto,gambling,wire_transfer
@@ -32,7 +36,9 @@ Use these production-leaning defaults:
 - `AUTO_CREATE_TABLES=false`
 - `ENABLE_DOCS=false`
 - a long random `SECRET_KEY` stored in a secret manager
+- stable JWT issuer and audience values for each environment
 - explicit `CORS_ORIGINS`
+- in-memory request and login throttle values sized for the deployment
 - TLS terminated by a trusted proxy/load balancer
 - `TRUST_PROXY_HEADERS=true` only when `TRUSTED_PROXY_CIDRS` is configured
 - explicit risk thresholds and high-risk merchant categories for each environment
@@ -97,16 +103,28 @@ In production, run Uvicorn behind a process manager or platform runtime rather t
 GET /health
 ```
 
-The current health check confirms the app process is serving requests. A future production version should add a database-readiness check if the deployment platform needs it.
+`GET /health` confirms the app process is serving requests.
+
+```http
+GET /health/db
+```
+
+`GET /health/db` performs a lightweight database-readiness query and returns
+`503 Service Unavailable` if the app cannot reach the configured database.
 
 ## CI
 
 GitHub Actions runs:
 
 ```bash
+python -m ruff check .
+python -m ruff format --check .
 python -m alembic upgrade head
 python -m coverage run -m pytest
 python -m coverage report
+python scripts/smoke_api.py
+npm test
 ```
 
-The workflow also starts a Postgres service so integration tests can verify database-specific behavior.
+The workflow also starts a Postgres service so integration tests can verify
+database-specific behavior, then starts the API locally for the live smoke test.

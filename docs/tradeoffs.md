@@ -23,11 +23,11 @@ small rules engine once non-engineers need live rule management.
 
 ## In-Memory Rate Limiting
 
-The current rate limiter is useful for local abuse resistance and for demonstrating request-boundary thinking.
+The current request limiter and login failed-attempt limiter are in-memory. That is intentional for the current project scale: it avoids adding Redis or another service before the app has real multi-instance pressure.
 
 Tradeoff: in-memory limits do not work across multiple app instances and reset on restart.
 
-Future path: use Redis or another shared store, and add tighter login-specific throttling.
+Future path: keep the in-memory implementation while the app runs as one process. Move to Redis or another shared store only if the deployment needs multiple app instances or stronger cross-process abuse controls.
 
 ## SQLite Fast Tests Plus Optional Postgres Integration
 
@@ -43,7 +43,7 @@ JWTs keep protected-route authentication stateless and straightforward.
 
 Tradeoff: basic JWTs are harder to revoke before expiration unless the system stores token versions or denylist state.
 
-Future path: add issuer/audience claims, token versioning, refresh tokens, and tests for expired/malformed/deleted-user token cases.
+Future path: add token versioning or refresh tokens if the product needs explicit revocation before access-token expiration.
 
 ## Idempotency Payload Comparison
 
@@ -57,5 +57,6 @@ Future path: remove the fallback after old rows have been backfilled or aged out
 
 ## Current Next Steps
 
-- Add CI status badge once the GitHub repo is connected.
 - Add a small admin or rule-management surface after core backend guarantees are stable.
+- Replace the demo console with a richer product UI only if the project is meant
+  to be evaluated as full-stack instead of backend-first.
