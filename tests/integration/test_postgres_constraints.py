@@ -1,6 +1,8 @@
 import os
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
+from threading import Barrier
 
 import pytest
 from alembic import command
@@ -10,6 +12,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 
 from app.db.models import Merchant, Transaction, User
+from app.transactions import service as transaction_service
+from app.transactions.schemas import TransactionCreateRequest
 
 POSTGRES_DATABASE_URL = os.getenv("POSTGRES_INTEGRATION_DATABASE_URL")
 
@@ -152,6 +156,112 @@ def test_postgres_stores_money_with_two_decimal_places(postgres_engine):
     finally:
         db.rollback()
         db.close()
+
+
+def test_postgres_concurrent_transaction_creation_is_idempotent(
+    postgres_engine,
+    monkeypatch,
+):
+    session_factory = sessionmaker(
+        autocommit=False,
+        autoflush=False,
+        bind=postgres_engine,
+    )
+
+    db = session_factory()
+    try:
+        user = User(
+            email="postgres-concurrency@example.com",
+            password_hash="not-a-real-password-hash",
+        )
+        db.add(user)
+        db.flush()
+
+        merchant = Merchant(
+            owner_user_id=user.id,
+            name="Concurrent Merchant",
+            category="retail",
+            trust_status="trusted",
+        )
+        db.add(merchant)
+        db.commit()
+
+        user_id = user.id
+        merchant_id = merchant.id
+    finally:
+        db.close()
+
+    payload = TransactionCreateRequest(
+        merchant_id=merchant_id,
+        amount=Decimal("42.00"),
+        currency="USD",
+    )
+    # ok this is the coolest trick i learned this whole project. races are normally impossible to test
+    # reliably bc the timing is random — the bug shows up 1 in 1000 runs and never when you're watching.
+    # a Barrier(2) is like "both threads HAVE to hold hands and jump at the same time". so i force both
+    # workers to finish the "nope, no existing txn here" lookup BEFORE either is allowed to insert.
+    # that guarantees the exact collision i'm worried about, every single run. no more flaky maybe-bug
+    empty_lookup_barrier = Barrier(2)
+    original_find_transaction = transaction_service.find_transaction_by_idempotency_key
+
+    def synchronized_empty_lookup(db, *, user_id: int, idempotency_key: str):
+        transaction = original_find_transaction(
+            db,
+            user_id=user_id,
+            idempotency_key=idempotency_key,
+        )
+        if transaction is None:
+            empty_lookup_barrier.wait(timeout=15)
+        return transaction
+
+    monkeypatch.setattr(
+        transaction_service,
+        "find_transaction_by_idempotency_key",
+        synchronized_empty_lookup,
+    )
+
+    def create_transaction() -> tuple[int, bool]:
+        worker_db = session_factory()
+        try:
+            worker_user = worker_db.get(User, user_id)
+            assert worker_user is not None
+
+            transaction, created = transaction_service.create_transaction_with_idempotency(
+                worker_db,
+                user=worker_user,
+                payload=payload,
+                idempotency_key="concurrent-key",
+                request_id="postgres-concurrency-test",
+            )
+            return transaction.id, created
+        finally:
+            worker_db.close()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(lambda _: create_transaction(), range(2)))
+
+    transaction_ids = {transaction_id for transaction_id, _ in results}
+    created_flags = sorted(created for _, created in results)
+
+    # the payoff: even though TWO threads both thought "i'm the first one!", they land on ONE transaction id.
+    # exactly one of them actually created it (True), the other got told "lol no, here's the existing one" (False).
+    # [False, True] sorted = one created, one deduped. zero double-charges. this is the whole point of the project tbh
+    assert len(transaction_ids) == 1
+    assert created_flags == [False, True]
+
+    verification_db = session_factory()
+    try:
+        transactions = (
+            verification_db.query(Transaction)
+            .filter(
+                Transaction.user_id == user_id,
+                Transaction.idempotency_key == "concurrent-key",
+            )
+            .all()
+        )
+        assert len(transactions) == 1
+    finally:
+        verification_db.close()
 
 
 def build_transaction(user: User, merchant: Merchant, idempotency_key: str) -> Transaction:
