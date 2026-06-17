@@ -276,7 +276,12 @@ function handleLogout() {
 
 async function handleCreateMerchant(event) {
   event.preventDefault();
-  const form = new FormData(event.currentTarget);
+  // BUG I JUST SPENT AN HOUR ON: i used to call event.currentTarget.reset() down inside the await callback,
+  // and it kept throwing "cannot read reset of null". turns out the browser NULLS OUT event.currentTarget
+  // the moment the event handler returns — and `await` makes us return early. so currentTarget is long gone
+  // by the time the api call finishes. fix = grab the actual <form> node NOW, while it still exists, into a var.
+  const formElement = event.currentTarget;
+  const form = new FormData(formElement);
   await withBusy(async () => {
     await apiRequest("/merchants", {
       method: "POST",
@@ -286,7 +291,7 @@ async function handleCreateMerchant(event) {
         trust_status: form.get("trustStatus"),
       }),
     });
-    event.currentTarget.reset();
+    formElement.reset();
     await loadConsoleData();
   }, "Merchant created.");
 }
