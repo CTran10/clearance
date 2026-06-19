@@ -1,0 +1,195 @@
+package httpapi
+
+import (
+	"context"
+	"crypto/subtle"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"regexp"
+	"strings"
+	"sync"
+
+	"github.com/CTran10/clearance/internal/domain"
+	"github.com/CTran10/clearance/internal/transaction"
+)
+
+const defaultMaxBodyBytes int64 = 1 << 20
+
+var safeHeaderPattern = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,128}$`)
+
+type Config struct {
+	AuthValue      string
+	AllowedOrigins []string
+	MaxBodyBytes   int64
+}
+
+type RateLimiter interface {
+	Allow(ctx context.Context, key string) (bool, error)
+}
+
+type Router struct {
+	service *transaction.Service
+	limiter RateLimiter
+	config  Config
+}
+
+func NewRouter(service *transaction.Service, limiter RateLimiter, config Config) http.Handler {
+	if config.MaxBodyBytes <= 0 {
+		config.MaxBodyBytes = defaultMaxBodyBytes
+	}
+	return &Router{service: service, limiter: limiter, config: config}
+}
+
+func (r *Router) ServeHTTP(response http.ResponseWriter, request *http.Request) {
+	r.setBaseHeaders(response, request)
+
+	if request.Method == http.MethodOptions {
+		response.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if request.URL.Path == "/healthz" && request.Method == http.MethodGet {
+		writeJSON(response, http.StatusOK, map[string]string{"status": "ok"})
+		return
+	}
+	if request.URL.Path != "/transactions" || request.Method != http.MethodPost {
+		writeError(response, http.StatusNotFound, "not found")
+		return
+	}
+	r.createTransaction(response, request)
+}
+
+func (r *Router) createTransaction(response http.ResponseWriter, request *http.Request) {
+	if !authorized(request.Header.Get("Authorization"), r.config.AuthValue) {
+		writeError(response, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	allowed, err := r.limiter.Allow(request.Context(), request.RemoteAddr)
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "internal error")
+		return
+	}
+	if !allowed {
+		writeError(response, http.StatusTooManyRequests, "rate limit exceeded")
+		return
+	}
+
+	var payload struct {
+		AccountID   string `json:"account_id"`
+		MerchantID  string `json:"merchant_id"`
+		AmountCents int64  `json:"amount_cents"`
+		Currency    string `json:"currency"`
+	}
+	request.Body = http.MaxBytesReader(response, request.Body, r.config.MaxBodyBytes)
+	decoder := json.NewDecoder(request.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&payload); err != nil {
+		writeError(response, http.StatusBadRequest, "invalid request")
+		return
+	}
+
+	correlationID := request.Header.Get("X-Correlation-ID")
+	if correlationID == "" {
+		correlationID = domain.NewID("trace")
+	}
+	if !safeHeaderPattern.MatchString(correlationID) {
+		writeError(response, http.StatusBadRequest, "invalid request")
+		return
+	}
+
+	result, err := r.service.Create(
+		request.Context(),
+		transaction.CreateRequest{
+			AccountID:   payload.AccountID,
+			MerchantID:  payload.MerchantID,
+			AmountCents: payload.AmountCents,
+			Currency:    payload.Currency,
+		},
+		transaction.RequestMetadata{
+			IdempotencyKey: request.Header.Get("Idempotency-Key"),
+			CorrelationID:  correlationID,
+		},
+	)
+	if err != nil {
+		r.writeServiceError(response, err)
+		return
+	}
+
+	writeJSON(response, http.StatusAccepted, map[string]string{
+		"transaction_id": result.TransactionID,
+		"status":         string(result.Status),
+		"correlation_id": result.CorrelationID,
+	})
+}
+
+func (r *Router) writeServiceError(response http.ResponseWriter, err error) {
+	// one place to turn internal errors into http status codes. errors.Is "unwraps" the chain to find a sentinel
+	// even if it got wrapped 3 layers deep with %w — that's why i wrapped instead of stringifying earlier.
+	// the default case is the safety net: anything i didn't explicitly map becomes a generic 500, never a leak
+	switch {
+	case errors.Is(err, transaction.ErrInvalidRequest):
+		writeError(response, http.StatusBadRequest, "invalid request")
+	case errors.Is(err, transaction.ErrIdempotencyConflict):
+		writeError(response, http.StatusConflict, "idempotency key conflict")
+	default:
+		writeError(response, http.StatusInternalServerError, "internal error")
+	}
+}
+
+func (r *Router) setBaseHeaders(response http.ResponseWriter, request *http.Request) {
+	response.Header().Set("Content-Type", "application/json")
+	response.Header().Set("Cache-Control", "no-store")
+	response.Header().Set("X-Content-Type-Options", "nosniff")
+	response.Header().Set("X-Frame-Options", "DENY")
+	origin := request.Header.Get("Origin")
+	for _, allowed := range r.config.AllowedOrigins {
+		if origin == allowed {
+			response.Header().Set("Access-Control-Allow-Origin", origin)
+			response.Header().Set("Vary", "Origin")
+			response.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, Idempotency-Key, X-Correlation-ID")
+			response.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
+			return
+		}
+	}
+}
+
+func authorized(header string, expected string) bool {
+	if expected == "" || !strings.HasPrefix(header, "Bearer ") {
+		return false
+	}
+	got := strings.TrimPrefix(header, "Bearer ")
+	// timing attacks again (hi, callback to the python dummy-hash thing). a normal got == expected bails on
+	// the FIRST wrong byte, so a token starting with the right char takes a hair longer to reject. measure enough
+	// requests and you can brute the token one byte at a time. ConstantTimeCompare always checks every byte. == 1 means match
+	return subtle.ConstantTimeCompare([]byte(got), []byte(expected)) == 1
+}
+
+func writeError(response http.ResponseWriter, status int, message string) {
+	writeJSON(response, status, map[string]string{"error": message})
+}
+
+func writeJSON(response http.ResponseWriter, status int, payload any) {
+	response.WriteHeader(status)
+	_ = json.NewEncoder(response).Encode(payload)
+}
+
+type MemoryRateLimiter struct {
+	mu        sync.Mutex
+	remaining int
+}
+
+func NewMemoryRateLimiter(allowed int) *MemoryRateLimiter {
+	return &MemoryRateLimiter{remaining: allowed}
+}
+
+func (l *MemoryRateLimiter) Allow(context.Context, string) (bool, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if l.remaining <= 0 {
+		return false, nil
+	}
+	l.remaining--
+	return true, nil
+}
