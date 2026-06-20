@@ -1,15 +1,147 @@
+name: clearance
+
+x-service-env: &service-env
+  DATABASE_URL: postgres://clearance:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/clearance?sslmode=disable
+  KAFKA_BROKERS: redpanda:9092
+  REDIS_ADDR: redis:6379
+  TRANSACTION_API_AUTH_VALUE: ${TRANSACTION_API_AUTH_VALUE:?Set TRANSACTION_API_AUTH_VALUE in .env}
+  RATE_LIMIT_MAX_REQUESTS: ${RATE_LIMIT_MAX_REQUESTS:-60}
+  RATE_LIMIT_WINDOW_SECONDS: ${RATE_LIMIT_WINDOW_SECONDS:-60}
+  OUTBOX_MAX_ATTEMPTS: ${OUTBOX_MAX_ATTEMPTS:-3}
+  CONSUMER_MAX_ATTEMPTS: ${CONSUMER_MAX_ATTEMPTS:-3}
+  CORS_ORIGINS: ${CORS_ORIGINS:-}
+
 services:
   postgres:
     image: postgres:16
-    container_name: clearance-postgres
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-clearance}
+      POSTGRES_USER: clearance
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
-      POSTGRES_DB: ${POSTGRES_DB:-clearance}
+      POSTGRES_DB: clearance
     ports:
       - "127.0.0.1:${POSTGRES_HOST_PORT:-5433}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U clearance -d clearance"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
     volumes:
       - postgres_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "127.0.0.1:${REDIS_HOST_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redpanda:
+    image: docker.redpanda.com/redpandadata/redpanda:latest
+    command:
+      - redpanda
+      - start
+      - --overprovisioned
+      - --smp=1
+      - --memory=512M
+      - --reserve-memory=0M
+      - --node-id=0
+      - --check=false
+      - --kafka-addr=internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr=internal://redpanda:9092,external://127.0.0.1:19092
+      - --set=redpanda.auto_create_topics_enabled=true
+    ports:
+      - "127.0.0.1:${REDPANDA_HOST_PORT:-19092}:19092"
+      - "127.0.0.1:${REDPANDA_ADMIN_HOST_PORT:-9644}:9644"
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -q Healthy"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  migrate:
+    image: postgres:16
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - ./migrations:/migrations:ro
+    command:
+      - sh
+      - -c
+      - psql -h postgres -U clearance -d clearance -v ON_ERROR_STOP=1 -f /migrations/001_init.sql
+
+  app:
+    build: .
+    command: ["/usr/local/bin/transaction-service"]
+    environment:
+      <<: *service-env
+      PORT: 8080
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${TRANSACTION_SERVICE_HOST_PORT:-8080}:8080"
+
+  outbox-publisher:
+    build: .
+    command: ["/usr/local/bin/outbox-publisher"]
+    environment:
+      <<: *service-env
+      HEALTH_PORT: 8081
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redpanda:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${OUTBOX_HEALTH_HOST_PORT:-8081}:8081"
+
+  risk-service:
+    build: .
+    command: ["/usr/local/bin/risk-service"]
+    environment:
+      <<: *service-env
+      HEALTH_PORT: 8082
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${RISK_HEALTH_HOST_PORT:-8082}:8082"
+
+  ledger-service:
+    build: .
+    command: ["/usr/local/bin/ledger-service"]
+    environment:
+      <<: *service-env
+      HEALTH_PORT: 8083
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redpanda:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${LEDGER_HEALTH_HOST_PORT:-8083}:8083"
+
+  notification-service:
+    build: .
+    command: ["/usr/local/bin/notification-service"]
+    environment:
+      <<: *service-env
+      HEALTH_PORT: 8084
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redpanda:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${NOTIFICATION_HEALTH_HOST_PORT:-8084}:8084"
 
 volumes:
   postgres_data:

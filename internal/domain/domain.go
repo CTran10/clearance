@@ -40,9 +40,9 @@ const (
 )
 
 type RiskEvaluation struct {
-	Level    RiskLevel
-	Approved bool
-	Reason   string
+	Level    RiskLevel `json:"level"`
+	Approved bool      `json:"approved"`
+	Reason   string    `json:"reason"`
 }
 
 func EvaluateRisk(amountCents int64) RiskEvaluation {
@@ -64,24 +64,24 @@ func EvaluateRisk(amountCents int64) RiskEvaluation {
 }
 
 type Transaction struct {
-	ID            string
-	AccountID     string
-	MerchantID    string
-	AmountCents   int64
-	Currency      string
-	Status        TransactionStatus
-	CorrelationID string
-	CreatedAt     time.Time
+	ID            string            `json:"id"`
+	AccountID     string            `json:"account_id"`
+	MerchantID    string            `json:"merchant_id"`
+	AmountCents   int64             `json:"amount_cents"`
+	Currency      string            `json:"currency"`
+	Status        TransactionStatus `json:"status"`
+	CorrelationID string            `json:"correlation_id"`
+	CreatedAt     time.Time         `json:"created_at"`
 }
 
 type OutboxEvent struct {
-	ID            string
-	Type          EventType
-	CorrelationID string
-	Payload       []byte
-	Status        OutboxStatus
-	Attempts      int
-	CreatedAt     time.Time
+	ID            string       `json:"id"`
+	Type          EventType    `json:"type"`
+	CorrelationID string       `json:"correlation_id"`
+	Payload       []byte       `json:"payload"`
+	Status        OutboxStatus `json:"status"`
+	Attempts      int          `json:"attempts"`
+	CreatedAt     time.Time    `json:"created_at"`
 }
 
 func NewOutboxEvent(eventType EventType, correlationID string, payload []byte) OutboxEvent {
@@ -89,37 +89,37 @@ func NewOutboxEvent(eventType EventType, correlationID string, payload []byte) O
 		ID:            NewID("evt"),
 		Type:          eventType,
 		CorrelationID: correlationID,
-		Payload:       append([]byte(nil), payload...),
+		Payload:       append([]byte(nil), payload...), // defensive copy! go slices share their backing array, so if i just stored `payload` and the caller mutated their copy later, MY event would silently change too. append-onto-nil = fresh array nobody else holds
 		Status:        OutboxPending,
 		CreatedAt:     time.Now().UTC(),
 	}
 }
 
 type RiskEvaluated struct {
-	TransactionID string
-	AccountID     string
-	AmountCents   int64
-	Currency      string
-	RiskLevel     RiskLevel
-	Approved      bool
-	Reason        string
-	CorrelationID string
+	TransactionID string    `json:"transaction_id"`
+	AccountID     string    `json:"account_id"`
+	AmountCents   int64     `json:"amount_cents"`
+	Currency      string    `json:"currency"`
+	RiskLevel     RiskLevel `json:"risk_level"`
+	Approved      bool      `json:"approved"`
+	Reason        string    `json:"reason"`
+	CorrelationID string    `json:"correlation_id"`
 }
 
 type LedgerEntry struct {
-	ID            string
-	TransactionID string
-	AccountID     string
-	AmountCents   int64
-	Currency      string
-	CreatedAt     time.Time
+	ID            string    `json:"id"`
+	TransactionID string    `json:"transaction_id"`
+	AccountID     string    `json:"account_id"`
+	AmountCents   int64     `json:"amount_cents"`
+	Currency      string    `json:"currency"`
+	CreatedAt     time.Time `json:"created_at"`
 }
 
 type Event struct {
-	ID            string
-	Type          EventType
-	CorrelationID string
-	Payload       []byte
+	ID            string    `json:"id"`
+	Type          EventType `json:"type"`
+	CorrelationID string    `json:"correlation_id"`
+	Payload       []byte    `json:"payload"`
 }
 
 func NewEvent(eventType EventType, correlationID string, payload []byte) Event {
@@ -127,7 +127,7 @@ func NewEvent(eventType EventType, correlationID string, payload []byte) Event {
 		ID:            NewID("msg"),
 		Type:          eventType,
 		CorrelationID: correlationID,
-		Payload:       append([]byte(nil), payload...),
+		Payload:       append([]byte(nil), payload...), // same defensive copy as NewOutboxEvent — never alias the caller's slice
 	}
 }
 

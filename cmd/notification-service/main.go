@@ -1,0 +1,108 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"log/slog"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
+	"github.com/CTran10/clearance/internal/appenv"
+	"github.com/CTran10/clearance/internal/domain"
+	"github.com/CTran10/clearance/internal/health"
+	"github.com/CTran10/clearance/internal/kafkabus"
+	"github.com/CTran10/clearance/internal/postgres"
+	"github.com/segmentio/kafka-go"
+)
+
+func main() {
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	store, err := postgres.Open(ctx, appenv.Must("DATABASE_URL"))
+	if err != nil {
+		slog.Error("postgres startup failed")
+		os.Exit(1)
+	}
+	defer store.Close()
+
+	brokers := appenv.CSV("KAFKA_BROKERS", []string{"redpanda:9092"})
+	reader := kafkabus.NewReader(brokers, kafkabus.TopicTransactionAuthorized, "notification-service")
+	defer func() {
+		_ = reader.Close()
+	}()
+	maxAttempts := appenv.Int("CONSUMER_MAX_ATTEMPTS", 3)
+	health.Start(ctx, ":"+appenv.String("HEALTH_PORT", "8084"))
+
+	slog.Info("notification service started")
+	for {
+		message, err := reader.FetchMessage(ctx)
+		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			slog.Warn("notification service fetch failed")
+			continue
+		}
+		err = retry(ctx, maxAttempts, func() error {
+			var event domain.RiskEvaluated
+			if err := json.Unmarshal(message.Value, &event); err != nil {
+				return err
+			}
+			return notify(ctx, store, event)
+		})
+		if err != nil {
+			_ = kafkabus.WriteDeadLetter(ctx, brokers, string(message.Key), correlationID(message.Headers), message.Value)
+			slog.Warn("notification service moved message to dead letter")
+		}
+		if err := reader.CommitMessages(ctx, message); err != nil {
+			slog.Warn("notification service commit failed")
+		}
+	}
+}
+
+func notify(ctx context.Context, store *postgres.Store, event domain.RiskEvaluated) error {
+	metadata, err := json.Marshal(map[string]string{"notification": "simulated_webhook"})
+	if err != nil {
+		return err
+	}
+	if err := store.InsertAuditLog(
+		ctx,
+		"WEBHOOK_NOTIFICATION_SENT",
+		event.TransactionID,
+		event.CorrelationID,
+		metadata,
+	); err != nil {
+		return err
+	}
+	slog.Info("webhook notification simulated", "transaction_id", event.TransactionID, "correlation_id", event.CorrelationID)
+	return nil
+}
+
+func retry(ctx context.Context, maxAttempts int, fn func() error) error {
+	var err error
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		if err = fn(); err == nil {
+			return nil
+		}
+		timer := time.NewTimer(time.Duration(attempt) * 100 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return err
+}
+
+func correlationID(headers []kafka.Header) string {
+	for _, header := range headers {
+		if header.Key == "correlation_id" {
+			return string(header.Value)
+		}
+	}
+	return ""
+}
