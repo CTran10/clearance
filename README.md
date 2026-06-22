@@ -1,342 +1,243 @@
 # Clearance
 
-[![CI](https://github.com/CTran10/clearance/actions/workflows/ci.yml/badge.svg)](https://github.com/CTran10/clearance/actions/workflows/ci.yml)
+Clearance is a backend-heavy distributed systems MVP for payment authorization.
+It takes a transaction request, persists it as `PENDING`, publishes events through
+a transactional outbox, evaluates risk asynchronously, writes immutable ledger
+entries for approved transactions, and simulates webhook notification delivery.
 
-Clearance is a backend-focused portfolio project for a transaction authorization
-platform. It models the kind of system a payments, risk, fintech, or internal
-platform team might build: authenticated clients submit transactions, the API
-evaluates risk rules, stores an authorization decision, enforces idempotent
-retries, and records audit history.
-
-The project is intentionally more than CRUD. It is built to demonstrate backend
-engineering fundamentals that matter in production-style systems: durable
-storage, API contracts, authentication, authorization boundaries, database
-constraints, idempotency, migrations, observability, verification, and explicit
-tradeoffs.
-
-![Clearance operator console](docs/assets/clearance-operator-console.png)
-
-## What This Demonstrates
-
-- FastAPI service design with thin routes and service-layer domain logic.
-- JWT authentication with issuer, audience, expiration, and deleted-user checks.
-- User-owned resource scoping for merchants, transactions, and audit events.
-- Idempotent transaction creation with `Idempotency-Key` and canonical request hashes.
-- Risk decisions for amount thresholds, merchant trust, category, currency, and velocity.
-- Audit logs for registration, login, merchant creation, and authorization decisions.
-- Alembic migrations as the production-style schema authority.
-- SQLite-backed fast tests plus optional Postgres integration tests for database-specific behavior.
-- CI coverage, Ruff linting/format checks, frontend tests, and a live API smoke test.
-- A small dependency-free operator console that makes the backend behavior visible.
-
-## Product Slice
-
-The current slice supports:
-
-- `POST /auth/register`
-- `POST /auth/login`
-- `GET /users/me`
-- `POST /merchants`
-- `GET /merchants`
-- `POST /transactions`
-- `GET /transactions`
-- `GET /transactions/{id}`
-- `GET /audit-events`
-- `GET /health`
-- `GET /health/db`
-
-Transaction submission requires an `Idempotency-Key`. A retry with the same key
-and same payload returns the original transaction. Reusing the same key with a
-different payload returns `409 Conflict`.
+The project is intentionally small enough to run locally, but it demonstrates the
+reliability patterns a payments platform would need: idempotency, durable events,
+consumer retries, dead-letter handling, rate limiting, correlation IDs, structured
+logs, health checks, and explicit database constraints.
 
 ## Architecture
 
-Clearance is a modular monolith: one deployable FastAPI service organized by
-domain boundary.
+Services:
 
-```txt
-Client / Console
-  -> FastAPI middleware
-     -> auth routes
-     -> merchant routes
-     -> transaction routes
-        -> risk rules
-        -> idempotency checks
-        -> audit writes
-     -> audit routes
-  -> SQLAlchemy
-  -> Postgres in production-like environments
+- Transaction Service: HTTP API for `POST /transactions`.
+- Outbox Publisher: drains `outbox_events` and publishes to Redpanda/Kafka.
+- Risk Service: consumes `TransactionCreated` and publishes `RiskEvaluated`.
+- Ledger Service: consumes `RiskEvaluated`, writes ledger entries, and publishes
+  `TransactionAuthorized` or `TransactionFailed`.
+- Notification Service: consumes `TransactionAuthorized` and records a simulated
+  webhook notification.
+
+Infrastructure:
+
+- PostgreSQL for transactions, idempotency keys, outbox events, ledger entries,
+  and audit logs.
+- Redis for rate limiting.
+- Redpanda as the Kafka-compatible broker.
+- Docker Compose for local orchestration.
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant Tx as Transaction Service
+    participant DB as PostgreSQL
+    participant Outbox as Outbox Publisher
+    participant Kafka as Redpanda/Kafka
+    participant Risk as Risk Service
+    participant Ledger as Ledger Service
+    participant Notify as Notification Service
+
+    Client->>Tx: POST /transactions<br/>Idempotency-Key + Correlation ID
+    Tx->>Tx: Validate, authenticate, rate limit
+    Tx->>DB: Insert transaction=PENDING<br/>Insert idempotency key<br/>Insert TransactionCreated outbox event
+    Tx-->>Client: 202 Accepted
+    Outbox->>DB: Poll pending outbox_events
+    Outbox->>Kafka: Publish TransactionCreated
+    Outbox->>DB: Mark outbox event published
+    Risk->>Kafka: Consume TransactionCreated
+    Risk->>Risk: amount > 500.00 = HIGH<br/>otherwise LOW
+    Risk->>Kafka: Publish RiskEvaluated
+    Ledger->>Kafka: Consume RiskEvaluated
+    Ledger->>DB: Approved: write balanced immutable ledger entries
+    Ledger->>Kafka: Publish TransactionAuthorized or TransactionFailed
+    Notify->>Kafka: Consume TransactionAuthorized
+    Notify->>DB: Insert audit_logs notification record
 ```
 
-The detailed diagrams and request flows live in
-[docs/architecture.md](docs/architecture.md).
+## Event Flow
 
-## Stack
+`TransactionCreated`
 
-- FastAPI for HTTP routing and request handling
-- Pydantic for request and response contracts
-- SQLAlchemy for ORM models and database sessions
-- Alembic for migrations
-- Postgres for durable storage
-- Docker Compose for local Postgres
-- passlib with `bcrypt_sha256` for password hashing
-- python-jose for JWT signing and verification
-- pytest, coverage, httpx, and Ruff for verification
-- Dependency-free HTML/CSS/JavaScript frontend console
+- Produced by the Transaction Service through `outbox_events`.
+- Contains transaction ID, account ID, merchant ID, amount, currency, status, and
+  correlation ID.
+
+`RiskEvaluated`
+
+- Produced by the Risk Service.
+- `amount_cents > 50000` is `HIGH` risk and not approved.
+- All other amounts are `LOW` risk and approved.
+
+`TransactionAuthorized`
+
+- Produced by the Ledger Service after balanced ledger entries are inserted.
+
+`TransactionFailed`
+
+- Produced by the Ledger Service when risk evaluation is not approved.
+
+## Reliability Patterns
+
+- Idempotency: `Idempotency-Key` is required. Same key and payload returns the
+  same transaction response; same key with a different payload is rejected.
+- Transactional outbox: transaction creation and `TransactionCreated` outbox
+  write happen in the same PostgreSQL transaction.
+- Retry handling: outbox publishing and Kafka consumers retry before giving up.
+- Dead-letter handling: outbox rows become `DEAD_LETTERED` after max attempts;
+  failed consumer messages are written to the `dead-letter` Kafka topic.
+- Correlation IDs: `X-Correlation-ID` is accepted, validated, and propagated
+  through events.
+- Structured logging: services use Go `slog` and avoid logging request bodies or
+  bearer values.
+- Health endpoints: every service exposes `/healthz`.
+
+## Security Posture
+
+This is an MVP, not a full fintech system, but it keeps the trust boundaries
+serious:
+
+- Transaction API requires a bearer value from `TRANSACTION_API_AUTH_VALUE`.
+- Authorization headers are compared with constant-time comparison.
+- Request bodies are size-limited and decoded with unknown fields rejected.
+- Header values and identifiers are validated with safe-character allowlists.
+- SQL uses parameterized pgx queries.
+- CORS is allowlist-based through `CORS_ORIGINS`.
+- Redis rate-limit keys hash client identifiers before storage.
+- HTTP responses hide internal errors.
+- Local Docker uses plaintext service-to-service traffic for developer
+  convenience. In production, put TLS at ingress and enable TLS for Postgres,
+  Redis, and Redpanda clients.
+- Encryption at rest is delegated to the database/volume layer in this MVP.
 
 ## Quick Start
 
-Install dependencies:
+Create a local environment file:
 
 ```bash
-.venv/bin/python -m pip install -r requirements-dev.txt
+cp .env.example .env
 ```
 
-Create a local `.env` from `.env.example`, then replace the placeholder
-`SECRET_KEY` and local database password values.
+Set `POSTGRES_PASSWORD` and `TRANSACTION_API_AUTH_VALUE` in `.env` to local
+development values.
 
-Generate a development secret:
+Start the stack:
 
 ```bash
-python -c "import secrets; print(secrets.token_urlsafe(32))"
+docker compose up --build
 ```
 
-Start Postgres:
+Health checks:
 
 ```bash
-make db-up
+curl -i http://127.0.0.1:8080/healthz
+curl -i http://127.0.0.1:8081/healthz
+curl -i http://127.0.0.1:8082/healthz
+curl -i http://127.0.0.1:8083/healthz
+curl -i http://127.0.0.1:8084/healthz
 ```
 
-Apply migrations:
+Create a low-risk transaction:
 
 ```bash
-.venv/bin/alembic upgrade head
+curl -i -X POST http://127.0.0.1:8080/transactions \
+  -H "Authorization: Bearer $TRANSACTION_API_AUTH_VALUE" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: demo-low-001" \
+  -H "X-Correlation-ID: demo-trace-001" \
+  -d '{
+    "account_id": "acct_123",
+    "merchant_id": "merchant_123",
+    "amount_cents": 12550,
+    "currency": "USD"
+  }'
 ```
 
-Run the API:
+Create a high-risk transaction:
 
 ```bash
-make run
+curl -i -X POST http://127.0.0.1:8080/transactions \
+  -H "Authorization: Bearer $TRANSACTION_API_AUTH_VALUE" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: demo-high-001" \
+  -H "X-Correlation-ID: demo-trace-002" \
+  -d '{
+    "account_id": "acct_123",
+    "merchant_id": "merchant_999",
+    "amount_cents": 90000,
+    "currency": "USD"
+  }'
 ```
 
-Open API health:
+Inspect data:
 
 ```bash
-curl -i http://127.0.0.1:8000/health
-curl -i http://127.0.0.1:8000/health/db
+docker compose exec postgres psql -U clearance -d clearance \
+  -c "select id, amount_cents, status, risk_level from transactions order by created_at desc limit 5;"
+
+docker compose exec postgres psql -U clearance -d clearance \
+  -c "select transaction_id, account_id, amount_cents from ledger_entries order by created_at desc limit 10;"
 ```
-
-## Operator Console
-
-The frontend is a thin local console for portfolio review and manual testing. It
-is not trying to be a second full application.
-
-Start the API, then serve the console:
-
-```bash
-cd frontend
-python3 -m http.server 5173
-```
-
-Open:
-
-```txt
-http://127.0.0.1:5173
-```
-
-If browser requests are blocked by CORS, include the console origin in `.env`:
-
-```env
-CORS_ORIGINS=http://127.0.0.1:5173,http://localhost:5173
-```
-
-The console can register/login, create merchants, submit transactions, retry an
-idempotency key, and inspect decisions and audit events.
 
 ## Verification
 
-Run the same checks locally that CI is expected to enforce:
+Run tests:
 
 ```bash
-make lint
-make coverage
-make frontend-test
+go test ./...
 ```
 
-Run the live API smoke test after the API is running:
+Run vet:
 
 ```bash
-make smoke
+go vet ./...
 ```
 
-The smoke test exercises the system through HTTP:
-
-1. Health and database readiness.
-2. Register and login.
-3. Create trusted and untrusted merchants.
-4. Create an approved transaction.
-5. Retry the same idempotency key and confirm the original transaction returns.
-6. Reuse the key with a different payload and confirm `409 Conflict`.
-7. Create review and declined decisions.
-8. Confirm audit events were recorded.
-
-Current local verification from this repo state:
-
-- Backend tests: `48 passed, 5 skipped`
-- Coverage: `92%`
-- Frontend tests: `7 passed`
-- Live API smoke test: passing
-
-The skipped tests are Postgres integration tests when
-`POSTGRES_INTEGRATION_DATABASE_URL` is not set locally. CI provides Postgres and
-runs those integration tests.
-
-## CI
-
-GitHub Actions runs:
+Validate Compose:
 
 ```bash
-python -m ruff check .
-python -m ruff format --check .
-python -m alembic upgrade head
-python -m coverage run -m pytest
-python -m coverage report
-python scripts/smoke_api.py
-npm test
+docker compose config
 ```
 
-The CI job starts a Postgres service, applies migrations, runs database-aware
-tests, starts the API locally, then runs the smoke workflow against the live
-server.
+The current test suite covers:
 
-## API Walkthrough
-
-Register:
-
-```bash
-curl -i -X POST http://127.0.0.1:8000/auth/register \
-  -H "Content-Type: application/json" \
-  -d '{"email":"calvin@example.com","password":"Password1!"}'
-```
-
-Login:
-
-```bash
-curl -i -X POST http://127.0.0.1:8000/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"email":"calvin@example.com","password":"Password1!"}'
-```
-
-Create a merchant:
-
-```bash
-curl -i -X POST http://127.0.0.1:8000/merchants \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer PASTE_TOKEN_HERE" \
-  -d '{"name":"Summit Coffee","category":"food","trust_status":"trusted"}'
-```
-
-Create a transaction:
-
-```bash
-curl -i -X POST http://127.0.0.1:8000/transactions \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer PASTE_TOKEN_HERE" \
-  -H "Idempotency-Key: demo-key-001" \
-  -d '{"merchant_id":1,"amount":"125.50","currency":"USD"}'
-```
-
-Retry the same transaction request with the same `Idempotency-Key` to see the
-safe retry path. Reuse the same key with a different payload to see the conflict
-path.
-
-List audit events:
-
-```bash
-curl -i http://127.0.0.1:8000/audit-events \
-  -H "Authorization: Bearer PASTE_TOKEN_HERE"
-```
-
-## Security And Reliability Notes
-
-- Passwords are stored as hashes, not raw passwords.
-- New password hashes use `bcrypt_sha256` to avoid raw bcrypt's 72-byte password limit.
-- JWTs include issuer, audience, issued-at, and expiration claims.
-- `SECRET_KEY` is required at startup and cannot use the placeholder value.
-- Protected routes resolve the current user server-side.
-- User-owned resources are filtered by `current_user.id`.
-- Unknown request fields are rejected.
-- Request bodies over `MAX_REQUEST_BODY_BYTES` are rejected while streaming.
-- CORS origins are configured by environment.
-- Request IDs are validated before being logged or echoed.
-- Basic security headers and `Cache-Control: no-store` are added by middleware.
-- Rate limiting is in-memory by design for the current single-process scope.
-- Proxy headers are ignored unless explicitly trusted through CIDR configuration.
-
-## Migrations
-
-Run migrations:
-
-```bash
-.venv/bin/alembic upgrade head
-```
-
-Generate a new migration after changing models:
-
-```bash
-.venv/bin/alembic revision --autogenerate -m "describe schema change"
-```
-
-For production-like environments, keep `AUTO_CREATE_TABLES=false` and use
-Alembic as the schema authority. See [docs/deployment.md](docs/deployment.md)
-for rollout and rollback notes.
+- idempotency and payload-conflict behavior
+- transactional outbox event creation
+- outbox publish retry and dead-letter state
+- risk evaluation rules
+- ledger entry creation and failure behavior
+- Transaction Service auth, validation, CORS, rate-limit hook, and error masking
 
 ## Project Structure
 
 ```txt
-app/
-  auth/
-  audit/
-  core/
-  db/
-  merchants/
-  middleware/
-  transactions/
-  users/
-docs/
-frontend/
+cmd/
+  transaction-service/
+  outbox-publisher/
+  risk-service/
+  ledger-service/
+  notification-service/
+internal/
+  appenv/
+  domain/
+  health/
+  httpapi/
+  kafkabus/
+  ledger/
+  outbox/
+  postgres/
+  redislimiter/
+  transaction/
 migrations/
-scripts/
-tests/
+  001_init.sql
 ```
 
-Key files:
+## Resume Value
 
-- `app/main.py` wires the application.
-- `app/core/config.py` owns environment-backed settings.
-- `app/core/security.py` owns password hashing and JWT helpers.
-- `app/transactions/service.py` owns transaction creation and idempotency behavior.
-- `app/transactions/risk.py` owns authorization decision rules.
-- `scripts/smoke_api.py` verifies the live HTTP workflow.
-- `frontend/` contains the local operator console.
-
-## Tradeoffs
-
-This project is intentionally production-style, not production-complete.
-
-- It starts as a modular monolith instead of premature microservices.
-- Risk rules are environment-backed until the domain needs live rule management.
-- Rate limiting is in-memory until there is multi-instance pressure.
-- Fast tests use SQLite, while Postgres-specific behavior is covered separately.
-- The frontend is a demo console, not a full product surface.
-- Deployment is documented, but this repo currently focuses on local and CI evidence.
-
-More detail lives in [docs/tradeoffs.md](docs/tradeoffs.md).
-
-## Documentation
-
-- [Architecture](docs/architecture.md)
-- [Tradeoffs and future work](docs/tradeoffs.md)
-- [Deployment notes](docs/deployment.md)
-- [Frontend console](frontend/README.md)
-
+Clearance is built to show practical backend judgment rather than a giant mock
+fintech product. The interesting parts are the service boundaries, outbox
+pattern, async event flow, idempotent API behavior, retry and DLQ handling,
+immutable ledger writes, and security controls at the API/database boundary.

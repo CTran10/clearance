@@ -10,67 +10,23 @@ jobs:
   test:
     runs-on: ubuntu-latest
 
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_USER: clearance
-          POSTGRES_PASSWORD: clearance_ci
-          POSTGRES_DB: clearance_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U clearance -d clearance_test"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-
-    env:
-      DATABASE_URL: postgresql+psycopg://clearance:clearance_ci@localhost:5432/clearance_test
-      POSTGRES_INTEGRATION_DATABASE_URL: postgresql+psycopg://clearance:clearance_ci@localhost:5432/clearance_test
-      SECRET_KEY: ci-secret-key-with-more-than-thirty-two-characters
-      AUTO_CREATE_TABLES: "false"
-      ENABLE_DOCS: "false"
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Set up Go
+        uses: actions/setup-go@v5
         with:
-          python-version: "3.12"
+          go-version: "1.25.x"
 
-      - name: Set up Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22"
+      - name: Run tests
+        run: go test ./...
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -r requirements-dev.txt
+      - name: Run vet
+        run: go vet ./...
 
-      - name: Run lint
-        run: |
-          python -m ruff check .
-          python -m ruff format --check .
-
-      - name: Run migrations
-        run: python -m alembic upgrade head
-
-      - name: Run tests with coverage
-        run: |
-          python -m coverage run -m pytest
-          python -m coverage report
-
-      - name: Run live API smoke test
-        run: |
-          python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 > /tmp/clearance-api.log 2>&1 &
-          api_pid=$!
-          trap 'kill "$api_pid"' EXIT
-          python scripts/smoke_api.py || (cat /tmp/clearance-api.log && exit 1)
-
-      - name: Run frontend tests
-        working-directory: frontend
-        run: npm test
+      - name: Validate Docker Compose
+        env:
+          POSTGRES_PASSWORD: ci-local-placeholder
+          TRANSACTION_API_AUTH_VALUE: ci-local-placeholder
+        run: docker compose config >/dev/null

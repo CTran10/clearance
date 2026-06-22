@@ -1,35 +1,24 @@
-PYTHON ?= .venv/bin/python
-API_BASE_URL ?= http://127.0.0.1:8000
+GO_IMAGE ?= golang:1.25-alpine
+GO_DOCKER ?= docker run --rm -v $(CURDIR):/src -w /src $(GO_IMAGE)
 
-.PHONY: install install-dev db-up run test coverage lint smoke frontend-test ci-local
-
-install:
-	$(PYTHON) -m pip install -r requirements.txt
-
-install-dev:
-	$(PYTHON) -m pip install -r requirements-dev.txt
-
-db-up:
-	docker compose up -d
-
-run:
-	$(PYTHON) -m uvicorn app.main:app --reload
+.PHONY: test vet fmt compose-config up down ci-local
 
 test:
-	$(PYTHON) -m pytest
+	$(GO_DOCKER) go test ./...
 
-coverage:
-	$(PYTHON) -m coverage run -m pytest
-	$(PYTHON) -m coverage report
+vet:
+	$(GO_DOCKER) go vet ./...
 
-lint:
-	$(PYTHON) -m ruff check .
-	$(PYTHON) -m ruff format --check .
+fmt:
+	$(GO_DOCKER) gofmt -w cmd internal
 
-smoke:
-	CLEARANCE_API_BASE_URL=$(API_BASE_URL) $(PYTHON) scripts/smoke_api.py
+compose-config:
+	docker compose config
 
-frontend-test:
-	cd frontend && npm test
+up:
+	docker compose up --build
 
-ci-local: lint coverage frontend-test
+down:
+	docker compose down
+
+ci-local: test vet compose-config
