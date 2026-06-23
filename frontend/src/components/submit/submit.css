@@ -1,0 +1,101 @@
+.submit {
+  display: grid;
+  gap: var(--space-5);
+}
+
+/* ---- Live risk preview ---- */
+.riskpreview {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-5);
+  border: 1px solid var(--tone-line, var(--line-strong));
+  border-radius: var(--radius);
+  background:
+    linear-gradient(180deg, color-mix(in oklch, var(--tone-soft, var(--bg-2)) 55%, var(--bg-2)), var(--bg-2));
+  transition:
+    border-color var(--dur) var(--ease-out-expo),
+    background var(--dur) var(--ease-out-expo);
+}
+.riskpreview--empty {
+  --tone-line: var(--line);
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+  background: var(--bg-2);
+}
+.riskpreview__eyebrow {
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+.riskpreview__amount {
+  font-size: clamp(1.6rem, 1.2rem + 1.4vw, 2.1rem);
+  font-weight: 600;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  color: var(--text);
+}
+.riskpreview--empty .riskpreview__amount {
+  color: var(--text-faint);
+}
+.riskpreview__hint {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+.riskpreview__verdict {
+  display: grid;
+  justify-items: end;
+  gap: 4px;
+  text-align: right;
+}
+.riskpreview__outcome {
+  font-size: var(--text-sm);
+  font-weight: 650;
+  color: var(--tone, var(--text));
+  text-transform: capitalize;
+}
+.riskpreview__reason {
+  font-size: var(--text-xs);
+  color: var(--text-faint);
+}
+
+/* ---- Form groups ---- */
+.submit__group {
+  display: grid;
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.submit__legend {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 0;
+  margin-bottom: var(--space-1);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.submit__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3) var(--space-4);
+}
+.submit__actions {
+  padding-top: var(--space-1);
+}
+
+@media (max-width: 520px) {
+  .submit__grid {
+    grid-template-columns: 1fr;
+  }
+}

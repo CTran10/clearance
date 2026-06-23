@@ -1,0 +1,89 @@
+/*
+ * Design tokens — dark "control-room" console.
+ * One confident emerald accent, semantic risk tones, monospace for technical
+ * values. All colors in oklch so the palette stays perceptually consistent.
+ */
+:root {
+  color-scheme: dark;
+
+  /* Surfaces, from page floor up to hover */
+  --bg-0: oklch(16% 0.012 235);
+  --bg-1: oklch(22% 0.015 235);
+  --bg-2: oklch(26% 0.017 235);
+  --bg-3: oklch(30% 0.019 235);
+
+  /* Text */
+  --text: oklch(96% 0.006 235);
+  --text-muted: oklch(73% 0.014 235);
+  --text-faint: oklch(60% 0.014 235);
+
+  /* Lines */
+  --line: oklch(31% 0.014 235);
+  --line-strong: oklch(40% 0.016 235);
+
+  /* Accent (emerald) */
+  --accent: oklch(78% 0.155 165);
+  --accent-strong: oklch(84% 0.17 165);
+  --accent-ink: oklch(22% 0.05 165);
+  --accent-soft: oklch(30% 0.045 165);
+
+  /* Semantic tones: text / soft surface / border */
+  --positive: oklch(80% 0.15 162);
+  --positive-soft: oklch(30% 0.05 162);
+  --positive-line: oklch(45% 0.09 162);
+
+  --pending: oklch(82% 0.125 78);
+  --pending-soft: oklch(31% 0.045 78);
+  --pending-line: oklch(48% 0.08 78);
+
+  --negative: oklch(73% 0.16 26);
+  --negative-soft: oklch(31% 0.06 26);
+  --negative-line: oklch(48% 0.11 26);
+
+  --neutral: oklch(74% 0.012 235);
+  --neutral-soft: oklch(28% 0.014 235);
+  --neutral-line: oklch(40% 0.016 235);
+
+  --focus: oklch(80% 0.13 235);
+
+  /* Typography */
+  --font-sans: "Inter Variable", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono Variable", ui-monospace, "SF Mono", "Cascadia Code", monospace;
+
+  --text-2xs: 0.6875rem;
+  --text-xs: 0.75rem;
+  --text-sm: 0.8125rem;
+  --text-base: 0.9375rem;
+  --text-md: 1.0625rem;
+  --text-lg: 1.25rem;
+  --text-display: clamp(1.7rem, 1.2rem + 1.8vw, 2.4rem);
+
+  --tracking-eyebrow: 0.14em;
+
+  /* Spacing — 4px base */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2rem;
+  --space-7: 2.75rem;
+  --space-8: 4rem;
+
+  /* Radii */
+  --radius-sm: 8px;
+  --radius: 12px;
+  --radius-lg: 16px;
+  --radius-pill: 999px;
+
+  /* Elevation */
+  --shadow-panel: 0 1px 0 0 oklch(100% 0 0 / 0.025) inset, 0 24px 48px -30px oklch(0% 0 0 / 0.7);
+  --shadow-raised: 0 1px 0 0 oklch(100% 0 0 / 0.04) inset, 0 16px 30px -18px oklch(0% 0 0 / 0.7);
+  --glow-accent: 0 0 0 1px var(--accent-soft), 0 14px 36px -18px oklch(78% 0.155 165 / 0.55);
+
+  /* Motion */
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --dur-fast: 140ms;
+  --dur: 240ms;
+  --dur-slow: 440ms;
+}

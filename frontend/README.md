@@ -1,23 +1,66 @@
-# Clearance Event Console
+# Clearance Authorization Console
 
-This is a dependency-free frontend proof of concept for the Go-based Clearance
-authorization platform. It gives reviewers one small browser surface for the
-backend MVP: health checks, authenticated transaction submission, idempotency
-keys, correlation IDs, and a local receipt trail.
+An operator console for the Go-based Clearance authorization platform. It gives
+reviewers one browser surface for the backend MVP: health checks, authenticated
+transaction submission, idempotency and correlation headers, a live risk
+preview, and a local receipt trail.
 
 The console is intentionally thin. It does not replace the backend event log or
-ledger data. It only makes the distributed flow easier to demo.
+ledger data — it only makes the distributed flow easier to demo. State that
+matters to the API contract (the transaction payload, the four headers, the
+$500.00 risk threshold) is covered by unit tests.
 
-## Scope
+## Stack
 
-- Submit `POST /transactions` requests to the Transaction Service.
-- Send `Authorization`, `Idempotency-Key`, and `X-Correlation-ID` headers.
-- Preview the same risk threshold used by the Risk Service.
-- Keep the bearer value in memory only, not `localStorage`.
-- Store only the API base URL locally.
-- Show local receipts for accepted PENDING responses.
+- **Vite + React 19 + TypeScript** (strict)
+- Hand-built design system — no UI framework. Tokens live in
+  `src/styles/tokens.css`; primitives in `src/components/ui`.
+- Self-hosted **Inter** and **JetBrains Mono** (bundled, offline-safe)
+- **Vitest** for the domain-logic layer (`src/lib`)
 
-## Run Locally
+## Layout
+
+```
+src/
+├── lib/            # pure domain logic (validation, risk, formatting, api)
+├── state/          # useConsole reducer store
+├── components/
+│   ├── ui/         # Button, Field, Panel, StatusPill (+ ui.css)
+│   ├── shell/      # TopBar, ConnectionBar, NoticeBar, MetricStrip
+│   ├── submit/     # SubmitPanel + live RiskPreview
+│   ├── flow/       # event pipeline stepper
+│   └── receipts/   # receipt stream
+└── styles/         # tokens.css, global.css
+test/lib/           # Vitest suites mirroring the API contract
+```
+
+## What it does
+
+- Submit `POST /transactions` with `Authorization`, `Idempotency-Key`, and
+  `X-Correlation-ID` headers.
+- Preview the Risk Service decision live as you type the amount, with a
+  cents → dollars echo.
+- Keep the bearer value in memory only; persist just the API base URL.
+- Show accepted PENDING responses as a local receipt trail (last 12).
+
+## Develop
+
+```bash
+cd frontend
+npm install
+npm run dev          # http://127.0.0.1:5173
+```
+
+Other scripts:
+
+```bash
+npm test             # Vitest (domain logic)
+npm run typecheck    # tsc --noEmit
+npm run build        # type-check + production build to dist/
+npm run preview      # serve the production build
+```
+
+## Connect to the platform
 
 Start the platform from the repository root:
 
@@ -25,30 +68,13 @@ Start the platform from the repository root:
 docker compose up --build
 ```
 
-Serve this directory:
-
-```bash
-python3 -m http.server 5173
-```
-
-Open:
-
-```txt
-http://127.0.0.1:5173
-```
-
-The default API base URL is `http://127.0.0.1:8080`. If the browser blocks API
-calls, allow the frontend origin in the root `.env` file:
+The default API base URL is `http://127.0.0.1:8080` (editable via the
+**Connection** panel). If the browser blocks API calls, allow the frontend
+origin in the root `.env`:
 
 ```env
 CORS_ORIGINS=http://127.0.0.1:5173
 ```
 
-Set the local bearer value in the console to match
+Set the bearer value in the **Connection** panel to match
 `TRANSACTION_API_AUTH_VALUE`.
-
-## Test
-
-```bash
-npm test
-```
