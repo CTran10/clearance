@@ -15,7 +15,7 @@ func TestPublisherMarksEventPublishedOnSuccess(t *testing.T) {
 	event := domain.NewOutboxEvent(domain.EventTransactionCreated, "trace_123", []byte(`{"id":"txn_123"}`))
 	store.AddPending(event)
 	broker := NewRecordingBroker()
-	publisher := NewPublisher(store, broker, Config{MaxAttempts: 3})
+	publisher := NewPublisher(store, broker.Publish, Config{MaxAttempts: 3})
 
 	if err := publisher.PublishNext(context.Background()); err != nil {
 		t.Fatalf("PublishNext returned error: %v", err)
@@ -37,7 +37,7 @@ func TestPublisherRetriesThenMovesEventToDeadLetter(t *testing.T) {
 	event := domain.NewOutboxEvent(domain.EventTransactionCreated, "trace_123", []byte(`{"id":"txn_123"}`))
 	store.AddPending(event)
 	broker := NewFailingBroker(errors.New("broker unavailable"))
-	publisher := NewPublisher(store, broker, Config{MaxAttempts: 3})
+	publisher := NewPublisher(store, broker.Publish, Config{MaxAttempts: 3})
 
 	for range 3 {
 		if err := publisher.PublishNext(context.Background()); err == nil {

@@ -7,9 +7,11 @@ x-service-env: &service-env
   TRANSACTION_API_AUTH_VALUE: ${TRANSACTION_API_AUTH_VALUE:?Set TRANSACTION_API_AUTH_VALUE in .env}
   RATE_LIMIT_MAX_REQUESTS: ${RATE_LIMIT_MAX_REQUESTS:-60}
   RATE_LIMIT_WINDOW_SECONDS: ${RATE_LIMIT_WINDOW_SECONDS:-60}
+  TRUST_X_FORWARDED_FOR: ${TRUST_X_FORWARDED_FOR:-false}
   OUTBOX_MAX_ATTEMPTS: ${OUTBOX_MAX_ATTEMPTS:-3}
   CONSUMER_MAX_ATTEMPTS: ${CONSUMER_MAX_ATTEMPTS:-3}
   CORS_ORIGINS: ${CORS_ORIGINS:-}
+  METRICS_ENABLED: ${METRICS_ENABLED:-false}
 
 services:
   postgres:
@@ -132,20 +134,6 @@ services:
         condition: service_healthy
     ports:
       - "127.0.0.1:${LEDGER_HEALTH_HOST_PORT:-8083}:8083"
-
-  notification-service:
-    build: .
-    command: ["/usr/local/bin/notification-service"]
-    environment:
-      <<: *service-env
-      HEALTH_PORT: 8084
-    depends_on:
-      migrate:
-        condition: service_completed_successfully
-      redpanda:
-        condition: service_healthy
-    ports:
-      - "127.0.0.1:${NOTIFICATION_HEALTH_HOST_PORT:-8084}:8084"
 
 volumes:
   postgres_data:

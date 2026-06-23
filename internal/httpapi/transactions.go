@@ -5,12 +5,15 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
+	"net/netip"
 	"regexp"
+	"strconv"
 	"strings"
-	"sync"
 
 	"github.com/CTran10/clearance/internal/domain"
+	"github.com/CTran10/clearance/internal/metrics"
 	"github.com/CTran10/clearance/internal/transaction"
 )
 
@@ -19,9 +22,11 @@ const defaultMaxBodyBytes int64 = 1 << 20
 var safeHeaderPattern = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,128}$`)
 
 type Config struct {
-	AuthValue      string
-	AllowedOrigins []string
-	MaxBodyBytes   int64
+	AuthValue         string
+	AllowedOrigins    []string
+	MaxBodyBytes      int64
+	TrustForwardedFor bool
+	MetricsEnabled    bool
 }
 
 type RateLimiter interface {
@@ -42,6 +47,28 @@ func NewRouter(service *transaction.Service, limiter RateLimiter, config Config)
 }
 
 func (r *Router) ServeHTTP(response http.ResponseWriter, request *http.Request) {
+	if r.config.MetricsEnabled && request.URL.Path == "/metrics" && request.Method == http.MethodGet {
+		metrics.Handler().ServeHTTP(response, request)
+		return
+	}
+
+	recorder := &statusRecorder{ResponseWriter: response}
+	defer func() {
+		status := recorder.status
+		if status == 0 {
+			status = http.StatusOK
+		}
+		metrics.Inc("clearance_http_requests_total", metrics.Labels{
+			"method": request.Method,
+			"path":   metricPath(request),
+			"status": strconv.Itoa(status),
+		})
+	}()
+
+	r.serveHTTP(recorder, request)
+}
+
+func (r *Router) serveHTTP(response http.ResponseWriter, request *http.Request) {
 	r.setBaseHeaders(response, request)
 
 	if request.Method == http.MethodOptions {
@@ -65,7 +92,7 @@ func (r *Router) createTransaction(response http.ResponseWriter, request *http.R
 		return
 	}
 
-	allowed, err := r.limiter.Allow(request.Context(), request.RemoteAddr)
+	allowed, err := r.limiter.Allow(request.Context(), rateLimitKey(request, r.config.TrustForwardedFor))
 	if err != nil {
 		writeError(response, http.StatusInternalServerError, "internal error")
 		return
@@ -154,6 +181,15 @@ func (r *Router) setBaseHeaders(response http.ResponseWriter, request *http.Requ
 	}
 }
 
+func metricPath(request *http.Request) string {
+	switch request.URL.Path {
+	case "/healthz", "/transactions":
+		return request.URL.Path
+	default:
+		return "/unknown"
+	}
+}
+
 func authorized(header string, expected string) bool {
 	if expected == "" || !strings.HasPrefix(header, "Bearer ") {
 		return false
@@ -165,6 +201,30 @@ func authorized(header string, expected string) bool {
 	return subtle.ConstantTimeCompare([]byte(got), []byte(expected)) == 1
 }
 
+func rateLimitKey(request *http.Request, trustForwardedFor bool) string {
+	if trustForwardedFor {
+		if forwarded := firstForwardedFor(request.Header.Get("X-Forwarded-For")); forwarded != "" {
+			return forwarded
+		}
+	}
+	host, _, err := net.SplitHostPort(request.RemoteAddr)
+	if err == nil && host != "" {
+		return host
+	}
+	return request.RemoteAddr
+}
+
+func firstForwardedFor(header string) string {
+	for _, part := range strings.Split(header, ",") {
+		addr, err := netip.ParseAddr(strings.TrimSpace(part))
+		if err == nil {
+			return addr.String()
+		}
+		return ""
+	}
+	return ""
+}
+
 func writeError(response http.ResponseWriter, status int, message string) {
 	writeJSON(response, status, map[string]string{"error": message})
 }
@@ -174,22 +234,22 @@ func writeJSON(response http.ResponseWriter, status int, payload any) {
 	_ = json.NewEncoder(response).Encode(payload)
 }
 
-type MemoryRateLimiter struct {
-	mu        sync.Mutex
-	remaining int
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
 }
 
-func NewMemoryRateLimiter(allowed int) *MemoryRateLimiter {
-	return &MemoryRateLimiter{remaining: allowed}
-}
-
-func (l *MemoryRateLimiter) Allow(context.Context, string) (bool, error) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	if l.remaining <= 0 {
-		return false, nil
+func (r *statusRecorder) WriteHeader(status int) {
+	if r.status != 0 {
+		return
 	}
-	l.remaining--
-	return true, nil
+	r.status = status
+	r.ResponseWriter.WriteHeader(status)
+}
+
+func (r *statusRecorder) Write(payload []byte) (int, error) {
+	if r.status == 0 {
+		r.status = http.StatusOK
+	}
+	return r.ResponseWriter.Write(payload)
 }

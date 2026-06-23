@@ -3,9 +3,12 @@ package domain
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"time"
 )
+
+var ErrInsufficientFunds = errors.New("insufficient funds")
 
 type TransactionStatus string
 
@@ -35,6 +38,7 @@ type OutboxStatus string
 
 const (
 	OutboxPending      OutboxStatus = "PENDING"
+	OutboxProcessing   OutboxStatus = "PROCESSING"
 	OutboxPublished    OutboxStatus = "PUBLISHED"
 	OutboxDeadLettered OutboxStatus = "DEAD_LETTERED"
 )

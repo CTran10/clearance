@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/CTran10/clearance/internal/appenv"
+	"github.com/CTran10/clearance/internal/consumer"
 	"github.com/CTran10/clearance/internal/domain"
 	"github.com/CTran10/clearance/internal/health"
 	"github.com/CTran10/clearance/internal/kafkabus"
@@ -24,7 +25,7 @@ func main() {
 
 	store, err := postgres.Open(ctx, appenv.Must("DATABASE_URL"))
 	if err != nil {
-		slog.Error("postgres startup failed")
+		slog.Error("postgres startup failed", "err", err)
 		os.Exit(1)
 	}
 	defer store.Close()
@@ -34,59 +35,26 @@ func main() {
 	defer func() {
 		_ = reader.Close()
 	}()
-	service := ledger.NewService(store, kafkabus.NewEventPublisher(brokers))
+	publisher := kafkabus.NewPublisher(brokers)
+	defer func() {
+		_ = publisher.Close()
+	}()
+	service := ledger.NewService(store, func(ctx context.Context, event domain.Event) error {
+		return publisher.Publish(ctx, kafkabus.TopicFor(event.Type), event.ID, event.CorrelationID, event.Payload)
+	})
 	maxAttempts := appenv.Int("CONSUMER_MAX_ATTEMPTS", 3)
-	health.Start(ctx, ":"+appenv.String("HEALTH_PORT", "8083"))
+	health.Start(ctx, ":"+appenv.String("HEALTH_PORT", "8083"), appenv.Bool("METRICS_ENABLED", false))
 
 	slog.Info("ledger service started")
-	for {
-		message, err := reader.FetchMessage(ctx)
-		if err != nil {
-			if ctx.Err() != nil {
-				return
-			}
-			slog.Warn("ledger service fetch failed")
-			continue
+	consumer.RunLoop(ctx, reader, publisher, consumer.Config{
+		Name:           "ledger service",
+		MaxAttempts:    maxAttempts,
+		RetryBaseDelay: 100 * time.Millisecond,
+	}, func(ctx context.Context, message kafka.Message) error {
+		var event domain.RiskEvaluated
+		if err := json.Unmarshal(message.Value, &event); err != nil {
+			return err
 		}
-		err = retry(ctx, maxAttempts, func() error {
-			var event domain.RiskEvaluated
-			if err := json.Unmarshal(message.Value, &event); err != nil {
-				return err
-			}
-			return service.HandleRiskEvaluated(ctx, event)
-		})
-		if err != nil {
-			_ = kafkabus.WriteDeadLetter(ctx, brokers, string(message.Key), correlationID(message.Headers), message.Value)
-			slog.Warn("ledger service moved message to dead letter")
-		}
-		if err := reader.CommitMessages(ctx, message); err != nil {
-			slog.Warn("ledger service commit failed")
-		}
-	}
-}
-
-func retry(ctx context.Context, maxAttempts int, fn func() error) error {
-	var err error
-	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		if err = fn(); err == nil {
-			return nil
-		}
-		timer := time.NewTimer(time.Duration(attempt) * 100 * time.Millisecond)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return ctx.Err()
-		case <-timer.C:
-		}
-	}
-	return err
-}
-
-func correlationID(headers []kafka.Header) string {
-	for _, header := range headers {
-		if header.Key == "correlation_id" {
-			return string(header.Value)
-		}
-	}
-	return ""
+		return service.HandleRiskEvaluated(ctx, event)
+	})
 }

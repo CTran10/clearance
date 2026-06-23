@@ -55,6 +55,21 @@ func Int(name string, fallback int) int {
 	return parsed
 }
 
+func Bool(name string, fallback bool) bool {
+	value := strings.ToLower(strings.TrimSpace(os.Getenv(name)))
+	if value == "" {
+		return fallback
+	}
+	switch value {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return fallback
+	}
+}
+
 func DurationSeconds(name string, fallback time.Duration) time.Duration {
 	return time.Duration(Int(name, int(fallback.Seconds()))) * time.Second
 }

@@ -4,11 +4,7 @@ WORKDIR /src
 COPY go.mod ./
 RUN go mod download
 COPY . .
-RUN go build -o /out/transaction-service ./cmd/transaction-service
-RUN go build -o /out/outbox-publisher ./cmd/outbox-publisher
-RUN go build -o /out/risk-service ./cmd/risk-service
-RUN go build -o /out/ledger-service ./cmd/ledger-service
-RUN go build -o /out/notification-service ./cmd/notification-service
+RUN set -e; for dir in ./cmd/*; do go build -o "/out/$(basename "$dir")" "$dir"; done
 
 FROM alpine:3.21
 

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/CTran10/clearance/internal/appenv"
+	"github.com/CTran10/clearance/internal/consumer"
 	"github.com/CTran10/clearance/internal/domain"
 	"github.com/CTran10/clearance/internal/health"
 	"github.com/CTran10/clearance/internal/kafkabus"
@@ -24,34 +25,24 @@ func main() {
 	defer func() {
 		_ = reader.Close()
 	}()
-	publisher := kafkabus.NewEventPublisher(brokers)
+	publisher := kafkabus.NewPublisher(brokers)
+	defer func() {
+		_ = publisher.Close()
+	}()
 	maxAttempts := appenv.Int("CONSUMER_MAX_ATTEMPTS", 3)
-	health.Start(ctx, ":"+appenv.String("HEALTH_PORT", "8082"))
+	health.Start(ctx, ":"+appenv.String("HEALTH_PORT", "8082"), appenv.Bool("METRICS_ENABLED", false))
 
 	slog.Info("risk service started")
-	for {
-		message, err := reader.FetchMessage(ctx)
-		if err != nil {
-			if ctx.Err() != nil {
-				return
-			}
-			slog.Warn("risk service fetch failed")
-			continue
-		}
-		err = retry(ctx, maxAttempts, func() error {
-			return handle(ctx, publisher, message.Value)
-		})
-		if err != nil {
-			_ = kafkabus.WriteDeadLetter(ctx, brokers, string(message.Key), correlationID(message.Headers), message.Value)
-			slog.Warn("risk service moved message to dead letter")
-		}
-		if err := reader.CommitMessages(ctx, message); err != nil {
-			slog.Warn("risk service commit failed")
-		}
-	}
+	consumer.RunLoop(ctx, reader, publisher, consumer.Config{
+		Name:           "risk service",
+		MaxAttempts:    maxAttempts,
+		RetryBaseDelay: 100 * time.Millisecond,
+	}, func(ctx context.Context, message kafka.Message) error {
+		return handle(ctx, publisher, message.Value)
+	})
 }
 
-func handle(ctx context.Context, publisher *kafkabus.EventPublisher, payload []byte) error {
+func handle(ctx context.Context, publisher *kafkabus.Publisher, payload []byte) error {
 	var transaction domain.Transaction
 	if err := json.Unmarshal(payload, &transaction); err != nil {
 		return err
@@ -70,31 +61,6 @@ func handle(ctx context.Context, publisher *kafkabus.EventPublisher, payload []b
 	if err != nil {
 		return err
 	}
-	return publisher.Publish(ctx, domain.NewEvent(domain.EventRiskEvaluated, transaction.CorrelationID, eventPayload))
-}
-
-func retry(ctx context.Context, maxAttempts int, fn func() error) error {
-	var err error
-	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		if err = fn(); err == nil {
-			return nil
-		}
-		timer := time.NewTimer(time.Duration(attempt) * 100 * time.Millisecond)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return ctx.Err()
-		case <-timer.C:
-		}
-	}
-	return err
-}
-
-func correlationID(headers []kafka.Header) string {
-	for _, header := range headers {
-		if header.Key == "correlation_id" {
-			return string(header.Value)
-		}
-	}
-	return ""
+	event := domain.NewEvent(domain.EventRiskEvaluated, transaction.CorrelationID, eventPayload)
+	return publisher.Publish(ctx, kafkabus.TopicFor(event.Type), event.ID, event.CorrelationID, event.Payload)
 }

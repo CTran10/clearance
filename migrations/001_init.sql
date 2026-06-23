@@ -43,7 +43,7 @@ create table if not exists outbox_events (
     correlation_id text not null check (correlation_id ~ '^[A-Za-z0-9._:-]{1,128}$'),
     payload jsonb not null,
     status text not null default 'PENDING' check (
-        status in ('PENDING', 'PUBLISHED', 'DEAD_LETTERED')
+        status in ('PENDING', 'PROCESSING', 'PUBLISHED', 'DEAD_LETTERED')
     ),
     attempts integer not null default 0 check (attempts >= 0),
     last_error text,
@@ -67,18 +67,6 @@ create table if not exists ledger_entries (
 
 create index if not exists ix_ledger_entries_account_created_at
     on ledger_entries (account_id, created_at desc);
-
-create table if not exists audit_logs (
-    id bigserial primary key,
-    action text not null,
-    transaction_id text references transactions(id) on delete restrict,
-    correlation_id text not null check (correlation_id ~ '^[A-Za-z0-9._:-]{1,128}$'),
-    metadata jsonb not null default '{}'::jsonb,
-    created_at timestamptz not null default now()
-);
-
-create index if not exists ix_audit_logs_transaction_id
-    on audit_logs (transaction_id);
 
 create or replace function prevent_ledger_entry_mutation()
 returns trigger language plpgsql as $$

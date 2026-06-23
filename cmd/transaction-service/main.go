@@ -23,7 +23,7 @@ func main() {
 
 	store, err := postgres.Open(ctx, appenv.Must("DATABASE_URL"))
 	if err != nil {
-		slog.Error("postgres startup failed")
+		slog.Error("postgres startup failed", "err", err)
 		os.Exit(1)
 	}
 	defer store.Close()
@@ -41,14 +41,19 @@ func main() {
 		transaction.NewService(store),
 		limiter,
 		httpapi.Config{
-			AuthValue:      appenv.Must("TRANSACTION_API_AUTH_VALUE"),
-			AllowedOrigins: appenv.CSV("CORS_ORIGINS", nil),
+			AuthValue:         appenv.Must("TRANSACTION_API_AUTH_VALUE"),
+			AllowedOrigins:    appenv.CSV("CORS_ORIGINS", nil),
+			TrustForwardedFor: appenv.Bool("TRUST_X_FORWARDED_FOR", false),
+			MetricsEnabled:    appenv.Bool("METRICS_ENABLED", false),
 		},
 	)
 	server := &http.Server{
 		Addr:              ":" + appenv.String("PORT", "8080"),
 		Handler:           handler,
 		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      10 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 
 	go func() {
@@ -60,7 +65,7 @@ func main() {
 
 	slog.Info("transaction service listening", "addr", server.Addr)
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		slog.Error("transaction service stopped unexpectedly")
+		slog.Error("transaction service stopped unexpectedly", "err", err)
 		os.Exit(1)
 	}
 }

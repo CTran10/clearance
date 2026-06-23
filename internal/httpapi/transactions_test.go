@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 
 	"github.com/CTran10/clearance/internal/domain"
@@ -19,12 +20,32 @@ func testAuthValue() string {
 	return "local test bearer value"
 }
 
+type memoryRateLimiter struct {
+	mu        sync.Mutex
+	remaining int
+}
+
+func newMemoryRateLimiter(allowed int) *memoryRateLimiter {
+	return &memoryRateLimiter{remaining: allowed}
+}
+
+func (l *memoryRateLimiter) Allow(context.Context, string) (bool, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if l.remaining <= 0 {
+		return false, nil
+	}
+	l.remaining--
+	return true, nil
+}
+
 func TestTransactionHandlerRequiresBearerToken(t *testing.T) {
 	t.Parallel()
 
 	handler := NewRouter(
-		transaction.NewService(transaction.NewMemoryStore()),
-		NewMemoryRateLimiter(10),
+		transactionService(newTransactionMemoryStore()),
+		newMemoryRateLimiter(10),
 		Config{AuthValue: testAuthValue()},
 	)
 	request := httptest.NewRequest(http.MethodPost, "/transactions", bytes.NewBufferString(`{}`))
@@ -43,10 +64,10 @@ func TestTransactionHandlerRequiresBearerToken(t *testing.T) {
 func TestTransactionHandlerCreatesPendingTransaction(t *testing.T) {
 	t.Parallel()
 
-	store := transaction.NewMemoryStore()
+	store := newTransactionMemoryStore()
 	handler := NewRouter(
-		transaction.NewService(store),
-		NewMemoryRateLimiter(10),
+		transactionService(store),
+		newMemoryRateLimiter(10),
 		Config{AuthValue: testAuthValue(), AllowedOrigins: []string{"https://console.example"}},
 	)
 	body := bytes.NewBufferString(`{
@@ -98,7 +119,7 @@ func TestTransactionHandlerHidesInternalErrors(t *testing.T) {
 
 	handler := NewRouter(
 		transaction.NewService(failingStore{}),
-		NewMemoryRateLimiter(10),
+		newMemoryRateLimiter(10),
 		Config{AuthValue: testAuthValue()},
 	)
 	request := httptest.NewRequest(
@@ -127,10 +148,10 @@ func TestTransactionHandlerHidesInternalErrors(t *testing.T) {
 func TestTransactionHandlerRateLimitsBeforeCreatingTransaction(t *testing.T) {
 	t.Parallel()
 
-	store := transaction.NewMemoryStore()
+	store := newTransactionMemoryStore()
 	handler := NewRouter(
-		transaction.NewService(store),
-		NewMemoryRateLimiter(0),
+		transactionService(store),
+		newMemoryRateLimiter(0),
 		Config{AuthValue: testAuthValue()},
 	)
 	request := httptest.NewRequest(
@@ -152,6 +173,59 @@ func TestTransactionHandlerRateLimitsBeforeCreatingTransaction(t *testing.T) {
 	}
 }
 
+func TestTransactionHandlerRateLimitKeyStripsRemotePort(t *testing.T) {
+	t.Parallel()
+
+	limiter := &recordingLimiter{allowed: true}
+	handler := NewRouter(
+		transactionService(newTransactionMemoryStore()),
+		limiter,
+		Config{AuthValue: testAuthValue()},
+	)
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/transactions",
+		bytes.NewBufferString(`{"account_id":"acct_123","merchant_id":"merchant_123","amount_cents":100,"currency":"USD"}`),
+	)
+	request.RemoteAddr = "203.0.113.10:49152"
+	request.Header.Set("Authorization", "Bearer "+testAuthValue())
+	request.Header.Set("Idempotency-Key", "idem-123")
+
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	if limiter.key != "203.0.113.10" {
+		t.Fatalf("rate limit key = %q, want host without ephemeral port", limiter.key)
+	}
+}
+
+func TestTransactionHandlerRateLimitKeyCanUseTrustedForwardedFor(t *testing.T) {
+	t.Parallel()
+
+	limiter := &recordingLimiter{allowed: true}
+	handler := NewRouter(
+		transactionService(newTransactionMemoryStore()),
+		limiter,
+		Config{AuthValue: testAuthValue(), TrustForwardedFor: true},
+	)
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/transactions",
+		bytes.NewBufferString(`{"account_id":"acct_123","merchant_id":"merchant_123","amount_cents":100,"currency":"USD"}`),
+	)
+	request.RemoteAddr = "10.0.0.5:12345"
+	request.Header.Set("Authorization", "Bearer "+testAuthValue())
+	request.Header.Set("Idempotency-Key", "idem-123")
+	request.Header.Set("X-Forwarded-For", "198.51.100.7, 10.0.0.5")
+
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	if limiter.key != "198.51.100.7" {
+		t.Fatalf("rate limit key = %q, want validated forwarded client ip", limiter.key)
+	}
+}
+
 type failingStore struct{}
 
 func (failingStore) FindIdempotency(context.Context, string) (transaction.IdempotencyRecord, bool, error) {
@@ -160,4 +234,58 @@ func (failingStore) FindIdempotency(context.Context, string) (transaction.Idempo
 
 func (failingStore) Create(context.Context, transaction.IdempotencyRecord, domain.OutboxEvent) error {
 	return errTestInternal
+}
+
+func transactionService(store transaction.Store) *transaction.Service {
+	return transaction.NewService(store)
+}
+
+type transactionMemoryStore struct {
+	mu         sync.Mutex
+	idempotent map[string]transaction.IdempotencyRecord
+	outbox     []domain.OutboxEvent
+}
+
+func newTransactionMemoryStore() *transactionMemoryStore {
+	return &transactionMemoryStore{idempotent: make(map[string]transaction.IdempotencyRecord)}
+}
+
+func (s *transactionMemoryStore) FindIdempotency(_ context.Context, key string) (transaction.IdempotencyRecord, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	record, ok := s.idempotent[key]
+	return record, ok, nil
+}
+
+func (s *transactionMemoryStore) Create(_ context.Context, record transaction.IdempotencyRecord, event domain.OutboxEvent) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if existing, ok := s.idempotent[record.Key]; ok {
+		if existing.RequestHash != record.RequestHash {
+			return transaction.ErrIdempotencyConflict
+		}
+		return nil
+	}
+	s.idempotent[record.Key] = record
+	s.outbox = append(s.outbox, event)
+	return nil
+}
+
+func (s *transactionMemoryStore) OutboxEvents() []domain.OutboxEvent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return append([]domain.OutboxEvent(nil), s.outbox...)
+}
+
+type recordingLimiter struct {
+	key     string
+	allowed bool
+}
+
+func (l *recordingLimiter) Allow(_ context.Context, key string) (bool, error) {
+	l.key = key
+	return l.allowed, nil
 }

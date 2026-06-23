@@ -85,6 +85,36 @@ func TestServiceReplaysSameIdempotencyKeyAndRejectsPayloadMismatch(t *testing.T)
 	}
 }
 
+func TestServiceReplaysSamePayloadAfterConcurrentIdempotencyInsert(t *testing.T) {
+	t.Parallel()
+
+	request := CreateRequest{
+		AccountID:   "acct_123",
+		MerchantID:  "merchant_123",
+		AmountCents: 12_550,
+		Currency:    "USD",
+	}
+	metadata := RequestMetadata{IdempotencyKey: "idem-123", CorrelationID: "trace-123"}
+	existing := IdempotencyRecord{
+		Key:         metadata.IdempotencyKey,
+		RequestHash: hashRequest(request),
+		CreateResult: CreateResponse{
+			TransactionID: "txn_existing",
+			Status:        domain.TransactionPending,
+			CorrelationID: metadata.CorrelationID,
+		},
+	}
+	service := NewService(&concurrentIdempotencyStore{existing: existing})
+
+	response, err := service.Create(context.Background(), request, metadata)
+	if err != nil {
+		t.Fatalf("Create returned error: %v", err)
+	}
+	if response.TransactionID != existing.CreateResult.TransactionID {
+		t.Fatalf("transaction_id = %q, want replayed %q", response.TransactionID, existing.CreateResult.TransactionID)
+	}
+}
+
 func TestServiceValidatesTrustedInput(t *testing.T) {
 	t.Parallel()
 
@@ -136,4 +166,21 @@ func TestServiceValidatesTrustedInput(t *testing.T) {
 			}
 		})
 	}
+}
+
+type concurrentIdempotencyStore struct {
+	existing IdempotencyRecord
+	lookups  int
+}
+
+func (s *concurrentIdempotencyStore) FindIdempotency(context.Context, string) (IdempotencyRecord, bool, error) {
+	s.lookups++
+	if s.lookups == 1 {
+		return IdempotencyRecord{}, false, nil
+	}
+	return s.existing, true, nil
+}
+
+func (s *concurrentIdempotencyStore) Create(context.Context, IdempotencyRecord, domain.OutboxEvent) error {
+	return ErrIdempotencyConflict
 }

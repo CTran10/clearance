@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/CTran10/clearance/internal/domain"
@@ -108,6 +107,15 @@ func (s *Service) Create(ctx context.Context, request CreateRequest, metadata Re
 	}
 	event := domain.NewOutboxEvent(domain.EventTransactionCreated, metadata.CorrelationID, payload)
 	if err := s.store.Create(ctx, record, event); err != nil {
+		if errors.Is(err, ErrIdempotencyConflict) {
+			existing, ok, findErr := s.store.FindIdempotency(ctx, metadata.IdempotencyKey)
+			if findErr != nil {
+				return CreateResponse{}, fmt.Errorf("find idempotency key after conflict: %w", findErr)
+			}
+			if ok && existing.RequestHash == requestHash {
+				return existing.CreateResult, nil
+			}
+		}
 		return CreateResponse{}, fmt.Errorf("create transaction: %w", err)
 	}
 	return response, nil
@@ -138,49 +146,4 @@ func hashRequest(request CreateRequest) string {
 		request.Currency,
 	)))
 	return hex.EncodeToString(sum[:])
-}
-
-type MemoryStore struct {
-	mu           sync.Mutex
-	idempotent   map[string]IdempotencyRecord
-	transactions map[string]domain.Transaction
-	outbox       []domain.OutboxEvent
-}
-
-func NewMemoryStore() *MemoryStore {
-	return &MemoryStore{
-		idempotent:   make(map[string]IdempotencyRecord),
-		transactions: make(map[string]domain.Transaction),
-	}
-}
-
-func (s *MemoryStore) FindIdempotency(_ context.Context, key string) (IdempotencyRecord, bool, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	record, ok := s.idempotent[key]
-	return record, ok, nil
-}
-
-func (s *MemoryStore) Create(_ context.Context, record IdempotencyRecord, event domain.OutboxEvent) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if existing, ok := s.idempotent[record.Key]; ok {
-		if existing.RequestHash != record.RequestHash {
-			return ErrIdempotencyConflict
-		}
-		return nil
-	}
-	s.idempotent[record.Key] = record
-	s.transactions[record.Transaction.ID] = record.Transaction
-	s.outbox = append(s.outbox, event)
-	return nil
-}
-
-func (s *MemoryStore) OutboxEvents() []domain.OutboxEvent {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	return append([]domain.OutboxEvent(nil), s.outbox...)
 }

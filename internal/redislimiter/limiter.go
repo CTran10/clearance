@@ -10,6 +10,14 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+var allowScript = redis.NewScript(`
+local count = redis.call("INCR", KEYS[1])
+if count == 1 then
+	redis.call("PEXPIRE", KEYS[1], ARGV[1])
+end
+return count
+`)
+
 type Limiter struct {
 	client *redis.Client
 	limit  int
@@ -40,13 +48,11 @@ func (l *Limiter) Allow(ctx context.Context, key string) (bool, error) {
 	// trick: INCR returns the new count AND creates the key if missing, atomically. EXPIRE sets the window so it
 	// self-resets. both in a TxPipeline = one round trip not two. way nicer than the in-memory deque ever was
 	redisKey := l.redisKey(key)
-	pipe := l.client.TxPipeline()
-	count := pipe.Incr(ctx, redisKey)
-	pipe.Expire(ctx, redisKey, l.window)
-	if _, err := pipe.Exec(ctx); err != nil {
+	count, err := allowScript.Run(ctx, l.client, []string{redisKey}, l.window.Milliseconds()).Int64()
+	if err != nil {
 		return false, fmt.Errorf("rate limit check: %w", err)
 	}
-	return count.Val() <= int64(l.limit), nil
+	return count <= int64(l.limit), nil
 }
 
 func (l *Limiter) Close() error {
