@@ -1,4 +1,4 @@
-Clearance
+# Clearance
 
 Clearance is a Go-based event-driven transaction authorization platform built to explore the reliability patterns that emerge once systems move beyond a single request hitting a database.
 
@@ -6,7 +6,7 @@ Instead of processing everything synchronously, transactions flow through an asy
 
 The goal wasn’t to build a Stripe clone or a feature-heavy fintech application. The goal was to learn and demonstrate the engineering tradeoffs that appear once systems become asynchronous: idempotency, event delivery guarantees, retries, dead-letter handling, immutable writes, and failure recovery.
 
-Key Concepts
+## Key Concepts
 
 * Idempotency keys
 * Transactional outbox pattern
@@ -18,32 +18,39 @@ Key Concepts
 * Immutable ledger entries
 * Explicit database constraints
 
-⸻
-
-Quick Start
+## Quick Start
 
 Create a local environment file:
 
+```sh
 cp .env.example .env
+```
 
 Set local values for:
 
-POSTGRES_PASSWORD
-TRANSACTION_API_AUTH_VALUE
+```env
+POSTGRES_PASSWORD=
+TRANSACTION_API_AUTH_VALUE=
+```
 
 Start the platform:
 
+```sh
 docker compose up --build
+```
 
 Health checks:
 
+```sh
 curl -i http://127.0.0.1:8080/healthz
 curl -i http://127.0.0.1:8081/healthz
 curl -i http://127.0.0.1:8082/healthz
 curl -i http://127.0.0.1:8083/healthz
+```
 
 Submit a transaction:
 
+```sh
 curl -i http://127.0.0.1:8080/transactions \
   -H "Authorization: Bearer $TRANSACTION_API_AUTH_VALUE" \
   -H "Content-Type: application/json" \
@@ -55,94 +62,104 @@ curl -i http://127.0.0.1:8080/transactions \
     "amount_cents":12550,
     "currency":"USD"
   }'
+```
 
 Optional frontend console:
 
+```sh
 cd frontend
 python3 -m http.server 5173
+```
 
 Open:
 
+```text
 http://127.0.0.1:5173
+```
 
-Configure the same bearer value from .env and submit transactions against:
+Configure the same bearer value from `.env` and submit transactions against:
 
+```text
 http://127.0.0.1:8080
+```
 
-⸻
-
-What Runs
+## What Runs
 
 The Compose stack starts:
 
-* transaction-service on 127.0.0.1:8080
-* outbox-publisher on 127.0.0.1:8081
-* risk-service on 127.0.0.1:8082
-* ledger-service on 127.0.0.1:8083
+* `transaction-service` on `127.0.0.1:8080`
+* `outbox-publisher` on `127.0.0.1:8081`
+* `risk-service` on `127.0.0.1:8082`
+* `ledger-service` on `127.0.0.1:8083`
 * PostgreSQL
 * Redis
 * Redpanda
 
 The only business-facing endpoint is:
 
+```http
 POST /transactions
+```
 
 Requests require:
 
+```http
 Authorization: Bearer <TRANSACTION_API_AUTH_VALUE>
-Idempotency-Key
+Idempotency-Key: <unique-key>
+```
 
 Optional:
 
-X-Correlation-ID
+```http
+X-Correlation-ID: <trace-id>
+```
 
 Accepted requests return:
 
+```http
 202 Accepted
+```
 
-with a transaction in a PENDING state. Risk evaluation and ledger writes happen asynchronously through Redpanda.
+with a transaction in a `PENDING` state. Risk evaluation and ledger writes happen asynchronously through Redpanda.
 
-⸻
-
-Architecture
+## Architecture
 
 The system is split into several focused services, each responsible for a single stage of the transaction lifecycle.
 
-Transaction Service
+### Transaction Service
 
-Accepts transaction requests, validates input, enforces idempotency, and persists transactions as PENDING.
+Accepts transaction requests, validates input, enforces idempotency, and persists transactions as `PENDING`.
 
-Instead of publishing directly to Kafka, it writes a TransactionCreated event to an outbox table within the same database transaction. This avoids the classic “database write succeeded but event publish failed” problem.
+Instead of publishing directly to Kafka, it writes a `TransactionCreated` event to an outbox table within the same database transaction. This avoids the classic “database write succeeded but event publish failed” problem.
 
-Outbox Publisher
+### Outbox Publisher
 
-Continuously polls pending outbox events using FOR UPDATE SKIP LOCKED, publishes them to Redpanda, and updates their state.
+Continuously polls pending outbox events using `FOR UPDATE SKIP LOCKED`, publishes them to Redpanda, and updates their state.
 
 Failed publishes are retried before eventually being dead-lettered.
 
-Risk Service
+### Risk Service
 
-Consumes TransactionCreated events and evaluates risk asynchronously.
+Consumes `TransactionCreated` events and evaluates risk asynchronously.
 
 Current rules are intentionally simple:
 
-* Amounts over $500.00 are considered high risk
+* Amounts over `$500.00` are considered high risk
 * Everything else is approved
 
 The purpose is to demonstrate service boundaries and event flow rather than risk modeling.
 
-Ledger Service
+### Ledger Service
 
 Consumes risk decisions and records the outcome in an immutable ledger.
 
-Approved transactions are authorized only when the account has enough available
-ledger balance. Successful authorizations generate balanced ledger entries
-before a TransactionAuthorized event is published.
+Approved transactions are authorized only when the account has enough available ledger balance. Successful authorizations generate balanced ledger entries before a `TransactionAuthorized` event is published.
 
-Rejected transactions produce a TransactionFailed event.
+Rejected transactions produce a `TransactionFailed` event.
 
-Event Flow
+### Event Flow
 
+```mermaid
 sequenceDiagram
     participant Client
     participant Tx as Transaction Service
@@ -160,10 +177,9 @@ sequenceDiagram
     Ledger->>Kafka: Consume RiskEvaluated
     Ledger->>DB: Write immutable ledger entries
     Ledger->>Kafka: Publish TransactionAuthorized
+```
 
-⸻
-
-Persistence And Messaging
+## Persistence And Messaging
 
 PostgreSQL stores:
 
@@ -180,55 +196,53 @@ One of the core design decisions is the transactional outbox pattern.
 
 Transaction creation, idempotency storage, and event creation all occur within a single database transaction. Events are only published after they have been durably recorded, preventing inconsistencies between the database and event stream.
 
-⸻
+## Reliability Patterns
 
-Reliability Patterns
+### Idempotency
 
-Idempotency
-
-Every transaction requires an Idempotency-Key.
+Every transaction requires an `Idempotency-Key`.
 
 Submitting the same request multiple times returns the same transaction.
 
 Reusing an idempotency key with a different payload is rejected.
 
-Transactional Outbox
+### Transactional Outbox
 
 Transactions and their corresponding events are written atomically.
 
 If the database transaction succeeds, the event is guaranteed to exist and can be published later.
 
-Retries And Dead-Letter Handling
+### Retries And Dead-Letter Handling
 
 Publishers and consumers automatically retry transient failures.
 
 Events that exceed retry limits are moved into a dead-letter state instead of being silently dropped.
 
-Correlation IDs
+### Correlation IDs
 
-X-Correlation-ID values are propagated through every event.
+`X-Correlation-ID` values are propagated through every event.
 
 This makes it possible to trace a request across multiple services.
 
-Structured Logging
+### Structured Logging
 
 All services use structured logging and avoid leaking request bodies, secrets, or bearer values.
 
-Health Checks
+### Health Checks
 
 Every service exposes:
 
-/healthz
+```http
+GET /healthz
+```
 
 for monitoring and orchestration.
 
-Metrics
+### Metrics
 
-Set METRICS_ENABLED=true to expose basic Prometheus counters on /metrics.
+Set `METRICS_ENABLED=true` to expose basic Prometheus counters on `/metrics`.
 
-⸻
-
-Security Considerations
+## Security Considerations
 
 This is an MVP, not a production fintech platform, but trust boundaries are treated seriously.
 
@@ -248,21 +262,25 @@ For local development, service-to-service traffic is unencrypted.
 
 In production, TLS should be enabled at ingress and for PostgreSQL, Redis, and Redpanda connections.
 
-⸻
-
-Verification
+## Verification
 
 Run tests:
 
+```sh
 go test ./...
+```
 
 Run vet:
 
+```sh
 go vet ./...
+```
 
 Validate Compose:
 
+```sh
 docker compose config
+```
 
 The test suite covers:
 
@@ -278,15 +296,16 @@ The test suite covers:
 
 GitHub Actions runs:
 
+```sh
 go test ./...
 go vet ./...
 cd frontend && npm test
 docker compose config
+```
 
-⸻
+## Project Structure
 
-Project Structure
-
+```text
 cmd/
   transaction-service/
   outbox-publisher/
@@ -305,10 +324,9 @@ internal/
   transaction/
 migrations/
   001_init.sql
+```
 
-⸻
-
-Known Limits
+## Known Limits
 
 This project intentionally prioritizes architecture over business complexity.
 
@@ -324,13 +342,13 @@ Current limitations:
 * No distributed tracing UI yet
 * No Kubernetes deployment
 
-⸻
-
-Why I Built It
+## Why I Built It
 
 Most side projects stop at:
 
-Request → Application → Database
+```text
+Request -> Application -> Database
+```
 
 Clearance started there too.
 
