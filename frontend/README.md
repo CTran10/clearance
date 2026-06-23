@@ -5,8 +5,8 @@ authorization platform. It gives reviewers one small browser surface for the
 backend MVP: health checks, authenticated transaction submission, idempotency
 keys, correlation IDs, and a local receipt trail.
 
-The console is intentionally thin. It does not replace the backend event log,
-ledger, or audit data. It only makes the distributed flow easier to demo.
+The console is intentionally thin. It does not replace the backend event log or
+ledger data. It only makes the distributed flow easier to demo.
 
 ## Scope
 

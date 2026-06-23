@@ -472,8 +472,7 @@ function renderFlowPanel() {
       flowStep("Transaction Service", "Validates input, checks Redis rate limit, records PENDING and writes TransactionCreated to the outbox."),
       flowStep("Outbox Publisher", "Publishes TransactionCreated to Redpanda and marks the outbox row published."),
       flowStep("Risk Service", "Consumes the event. Amounts over 500.00 become HIGH risk."),
-      flowStep("Ledger Service", "Writes balanced ledger entries for LOW risk and emits the final transaction event."),
-      flowStep("Notification Service", "Consumes authorized events and records a simulated webhook audit log."),
+      flowStep("Ledger Service", "Checks available balance, writes entries for funded LOW risk transactions, and emits the final event."),
     ]),
   ]);
 }

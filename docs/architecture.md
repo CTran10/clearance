@@ -1,82 +1,84 @@
 # Architecture
 
-Clearance is currently a modular monolith. The code is split by responsibility inside one deployable FastAPI service instead of being split into services before the domain needs that complexity.
+Clearance v2 is a Go event-driven payments authorization MVP. It keeps the
+domain intentionally small, but the backend shape mirrors production payment
+systems: durable writes first, asynchronous event processing second, and
+observable service boundaries throughout.
 
-## System Diagram
+## Current State
 
-```mermaid
-flowchart TD
-    Client["API Client"] --> FastAPI["FastAPI App"]
-    FastAPI --> Middleware["Middleware\nrequest id, logging, body limit,\nrate limit, security headers, CORS"]
-    FastAPI --> Auth["Auth Routes\nregister, login, current user"]
-    FastAPI --> Merchants["Merchant Routes"]
-    FastAPI --> Transactions["Transaction Routes"]
-    FastAPI --> Audit["Audit Routes"]
+Services:
 
-    Auth --> UserService["Auth/User Logic"]
-    Merchants --> MerchantService["Merchant Service"]
-    Transactions --> TransactionService["Transaction Service"]
-    TransactionService --> Risk["Risk Decision Logic"]
-    TransactionService --> AuditService["Audit Service"]
-    Auth --> AuditService
-    Merchants --> AuditService
+- `transaction-service`: authenticated HTTP API for `POST /transactions`.
+- `outbox-publisher`: drains PostgreSQL `outbox_events` into Redpanda/Kafka.
+- `risk-service`: consumes `transactions.created` and publishes risk decisions.
+- `ledger-service`: consumes risk decisions, writes immutable ledger entries,
+  and publishes final transaction outcomes.
 
-    UserService --> DB["Postgres"]
-    MerchantService --> DB
-    TransactionService --> DB
-    AuditService --> DB
+Infrastructure:
 
-    Alembic["Alembic Migrations"] --> DB
-    Tests["Pytest + Coverage"] --> FastAPI
-    Integration["Optional Postgres Integration Tests"] --> DB
-```
-
-## Request Flow
-
-Most protected requests follow the same path:
-
-1. Middleware assigns or validates a request ID and applies cross-cutting safety checks.
-2. FastAPI routes parse the HTTP request.
-3. Pydantic validates request shape and rejects unknown fields.
-4. The auth dependency verifies the JWT and loads the current user.
-5. Route handlers call service functions for domain behavior.
-6. SQLAlchemy reads/writes durable state in Postgres.
-7. Audit events are recorded for important actions.
-8. Response models shape what the client receives.
-
-## Transaction Decision Flow
+- PostgreSQL stores transactions, idempotency records, outbox rows, ledger
+  entries.
+- Redis backs fixed-window API rate limiting.
+- Redpanda provides Kafka-compatible topics.
+- Every Go service exposes `/healthz`; `/metrics` is available when
+  `METRICS_ENABLED=true`.
 
 ```mermaid
-sequenceDiagram
-    participant Client
-    participant API as FastAPI
-    participant Auth as Auth Dependency
-    participant Tx as Transaction Service
-    participant Risk as Risk Logic
-    participant DB as Postgres
-    participant Audit as Audit Service
-
-    Client->>API: POST /transactions + Idempotency-Key
-    API->>Auth: Validate bearer token
-    Auth->>DB: Load current user
-    API->>Tx: Create transaction
-    Tx->>DB: Check prior idempotency key
-    Tx->>DB: Load owned merchant
-    Tx->>DB: Count recent user transactions
-    Tx->>Risk: Evaluate amount, merchant, currency, velocity
-    Risk-->>Tx: approved / declined / review
-    Tx->>DB: Insert transaction
-    Tx->>Audit: Record decision context
-    Audit->>DB: Insert audit event
-    Tx-->>API: Transaction result
-    API-->>Client: Response
+flowchart LR
+    Client["Client"] --> Tx["transaction-service"]
+    Tx --> Redis["Redis rate limit"]
+    Tx --> DB["PostgreSQL transaction + idempotency + outbox"]
+    Outbox["outbox-publisher"] --> DB
+    Outbox --> Kafka["Redpanda/Kafka"]
+    Kafka --> Risk["risk-service"]
+    Risk --> Kafka
+    Kafka --> Ledger["ledger-service"]
+    Ledger --> DB
+    Ledger --> Kafka
 ```
 
-## Main Guarantees
+## Reliability Patterns
 
-- A user can only access resources scoped to their own user id.
-- Duplicate transaction retries with the same idempotency key and same payload return the original transaction.
-- Reusing an idempotency key with a different payload returns `409 Conflict`.
-- Risk decisions are persisted with a score and reason.
-- Important actions are recorded in audit events.
-- Runtime configuration fails fast when required secrets or invalid security values are missing.
+- Idempotency keys protect client retries.
+- Transactional outbox prevents losing `TransactionCreated` after a database
+  commit.
+- Kafka producers require all acknowledgements.
+- Consumers retry with backoff before dead-lettering failed messages.
+- Ledger authorization checks available account balance before writing immutable,
+  balanced entries.
+- Correlation IDs flow through HTTP responses and Kafka message headers.
+- Structured logs avoid request bodies and bearer values.
+- Optional metrics expose HTTP status counts, Kafka publish results, and outbox
+  outcomes.
+
+## Active Scope
+
+- Active backend code is Go under `cmd/` and `internal/`.
+- Active database setup is SQL under `migrations/001_init.sql`.
+- The active HTTP API is only `POST /transactions`, plus health and optional
+  metrics.
+- The optional frontend console talks to `POST /transactions` on the Go
+  transaction service.
+
+## Feature Ranking
+
+1. Observability MVP: opt-in Prometheus-compatible `/metrics` on every Go service.
+   Highest ROI because the architecture already has events, Redis, Kafka, and
+   reliability patterns, but needed a visible operations surface.
+2. Failure-mode demo script: proves outbox retry, DLQ, and recovery under broker
+   outage.
+3. Transaction status read API: makes eventual consistency easy to inspect from
+   a client.
+4. Consumer lag/DLQ dashboard: strong SRE signal once metrics have enough data.
+5. OpenTelemetry traces: valuable after metrics exist, but higher setup cost.
+
+## Built MVP
+
+The first MVP is the observability layer:
+
+- opt-in `GET /metrics` on `transaction-service`.
+- opt-in `GET /metrics` on worker health servers.
+- `clearance_http_requests_total{method,path,status}`.
+- `clearance_kafka_messages_published_total{topic,result}`.
+- `clearance_outbox_events_total{result}`.
