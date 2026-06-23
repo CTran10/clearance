@@ -1,20 +1,17 @@
 const STORAGE_KEYS = {
   apiBaseUrl: "clearance.apiBaseUrl",
-  accessToken: "clearance.accessToken",
-  user: "clearance.user",
 };
 
-const DEFAULT_API_BASE_URL = "http://127.0.0.1:8000";
+const DEFAULT_API_BASE_URL = "http://127.0.0.1:8080";
+const SAFE_TOKEN_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
 
 let state = {
   apiBaseUrl: DEFAULT_API_BASE_URL,
-  token: "",
-  user: null,
-  merchants: [],
-  transactions: [],
-  auditEvents: [],
-  selectedTransactionId: null,
-  idempotencyKey: createIdempotencyKey(),
+  authValue: "",
+  receipts: [],
+  idempotencyKey: createSafeId("idem"),
+  correlationId: createSafeId("trace"),
+  health: "unknown",
   busy: false,
   message: "",
   error: "",
@@ -28,47 +25,121 @@ export function normalizeApiBaseUrl(value) {
   return trimmed.replace(/\/+$/, "");
 }
 
-export function buildAuthHeaders(token) {
-  if (!token) {
-    return {};
+export function buildTransactionHeaders(authValue, idempotencyKey, correlationId) {
+  const headers = {
+    "Content-Type": "application/json",
+    "Idempotency-Key": String(idempotencyKey || "").trim(),
+    "X-Correlation-ID": String(correlationId || "").trim(),
+  };
+  const bearer = String(authValue || "").trim();
+  if (bearer) {
+    headers.Authorization = `Bearer ${bearer}`;
   }
-  return { Authorization: `Bearer ${token}` };
+  return headers;
 }
 
-export function summarizeDecisions(transactions) {
-  return transactions.reduce(
-    (summary, transaction) => {
-      const status = transaction.status || "unknown";
+export function buildTransactionPayload(input) {
+  const accountId = String(input.accountId || "").trim();
+  const merchantId = String(input.merchantId || "").trim();
+  const amountText = String(input.amountCents || "").trim();
+  const currency = String(input.currency || "").trim().toUpperCase();
+
+  if (!accountId) {
+    throw new Error("account id is required");
+  }
+  if (!merchantId) {
+    throw new Error("merchant id is required");
+  }
+  if (!SAFE_TOKEN_PATTERN.test(accountId) || !SAFE_TOKEN_PATTERN.test(merchantId)) {
+    throw new Error("ids must use safe characters only");
+  }
+  // all this client-side validation is for being NICE (instant feedback), NOT for security. anyone can curl
+  // the api directly and skip this entirely, so the server re-checks everything. learned not to confuse
+  // "the form won't let me" with "the system won't let me" — those are very different promises
+  if (!/^\d+$/.test(amountText)) {
+    throw new Error("amount cents must be a whole number");
+  }
+  const amountCents = Number(amountText);
+  if (!Number.isSafeInteger(amountCents) || amountCents <= 0) {
+    throw new Error("amount cents must be greater than zero");
+  }
+  if (!/^[A-Z]{3}$/.test(currency)) {
+    throw new Error("currency must be a three-letter code");
+  }
+
+  return {
+    account_id: accountId,
+    merchant_id: merchantId,
+    amount_cents: amountCents,
+    currency,
+  };
+}
+
+// this is JUST a guess shown in the UI so the user isn't surprised — the SERVER is the real judge.
+// i duplicated the >$500 rule here on the client, which feels gross (two sources of truth) but it's only cosmetic.
+// if these ever disagree, the server wins, always. the frontend never actually decides anything
+export function riskPreview(amountCents) {
+  if (Number(amountCents) > 50_000) {
+    return {
+      level: "HIGH",
+      outcome: "likely failed",
+      reason: "Amount is greater than 500.00.",
+    };
+  }
+  return {
+    level: "LOW",
+    outcome: "likely authorized",
+    reason: "Amount is at or below 500.00.",
+  };
+}
+
+export function summarizeReceipts(receipts) {
+  return receipts.reduce(
+    (summary, receipt) => {
       summary.total += 1;
-      summary[status] = (summary[status] || 0) + 1;
+      if (receipt.status === "PENDING") {
+        summary.pending += 1;
+      }
+      if (receipt.previewRisk === "LOW") {
+        summary.lowRisk += 1;
+      }
+      if (receipt.previewRisk === "HIGH") {
+        summary.highRisk += 1;
+      }
       return summary;
     },
-    { total: 0, approved: 0, declined: 0, review: 0 },
+    { total: 0, pending: 0, lowRisk: 0, highRisk: 0 },
   );
 }
 
-export function decisionClass(status) {
-  if (status === "approved") {
-    return "status status-approved";
+export function statusClass(status) {
+  if (status === "PENDING") {
+    return "status status-pending";
   }
-  if (status === "declined") {
-    return "status status-declined";
+  if (status === "AUTHORIZED") {
+    return "status status-authorized";
   }
-  if (status === "review") {
-    return "status status-review";
+  if (status === "FAILED") {
+    return "status status-failed";
+  }
+  if (status === "LOW") {
+    return "status status-low";
+  }
+  if (status === "HIGH") {
+    return "status status-high";
   }
   return "status";
 }
 
-export function formatCurrency(amount, currency) {
-  const value = Number(amount);
-  if (!Number.isFinite(value)) {
-    return `${amount} ${currency}`;
+export function formatAmountCents(amountCents, currency) {
+  const cents = Number(amountCents);
+  if (!Number.isFinite(cents)) {
+    return `${amountCents} ${currency}`;
   }
   return new Intl.NumberFormat("en-US", {
     style: "currency",
     currency: currency || "USD",
-  }).format(value);
+  }).format(cents / 100); // store + send integer cents everywhere, divide by 100 ONLY here at the very last second for human eyes
 }
 
 export function formatDateTime(value) {
@@ -85,18 +156,6 @@ export function formatDateTime(value) {
   }).format(date);
 }
 
-export function createIdempotencyKey() {
-  // big realization: the idempotency key has to be made HERE on the client, once, before we send.
-  // if i generated it on the server, every retry would get a fresh key and we'd happily charge twice — the whole
-  // point is the retry reuses the SAME key. the client is the only one who knows "this is a retry of that"
-  if (globalThis.crypto && typeof globalThis.crypto.randomUUID === "function") {
-    return globalThis.crypto.randomUUID();
-  }
-  // randomUUID isn't on older browsers / non-https origins, so here's a jank-but-fine fallback. Math.random
-  // is NOT cryptographically random but for a demo idempotency key nobody's attacking, who cares
-  return `demo-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-}
-
 export async function parseApiError(response) {
   let body;
   try {
@@ -105,103 +164,32 @@ export async function parseApiError(response) {
     return `Request failed with ${response.status}`;
   }
 
-  // FastAPI is sneaky here: "detail" is a plain string for my own HTTPExceptions, but a whole ARRAY of
-  // {loc, msg} objects when pydantic validation fails. spent a while confused why my error toast said
-  // "[object Object]" until i realized i had to handle both shapes 🙃
+  if (typeof body.error === "string") {
+    return body.error;
+  }
   if (typeof body.detail === "string") {
     return body.detail;
-  }
-  if (Array.isArray(body.detail)) {
-    return body.detail
-      .map((item) => {
-        const field = Array.isArray(item.loc) ? item.loc.join(".") : "field";
-        return `${field}: ${item.msg}`;
-      })
-      .join("; ");
   }
   return `Request failed with ${response.status}`;
 }
 
-export function sortNewestFirst(items) {
-  return [...items].sort((left, right) => {
-    return new Date(right.created_at).getTime() - new Date(left.created_at).getTime();
-  });
+function createSafeId(prefix) {
+  if (globalThis.crypto && typeof globalThis.crypto.randomUUID === "function") {
+    return `${prefix}-${globalThis.crypto.randomUUID()}`;
+  }
+  return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
 function loadStateFromStorage() {
   state.apiBaseUrl = normalizeApiBaseUrl(localStorage.getItem(STORAGE_KEYS.apiBaseUrl));
-  state.token = localStorage.getItem(STORAGE_KEYS.accessToken) || "";
-
-  const storedUser = localStorage.getItem(STORAGE_KEYS.user);
-  if (storedUser) {
-    try {
-      state.user = JSON.parse(storedUser);
-    } catch {
-      localStorage.removeItem(STORAGE_KEYS.user);
-      state.user = null;
-    }
-  }
-}
-
-function persistSession({ accessToken, user }) {
-  state.token = accessToken;
-  state.user = user;
-  localStorage.setItem(STORAGE_KEYS.accessToken, accessToken);
-  localStorage.setItem(STORAGE_KEYS.user, JSON.stringify(user));
-}
-
-function clearSession() {
-  state.token = "";
-  state.user = null;
-  state.merchants = [];
-  state.transactions = [];
-  state.auditEvents = [];
-  state.selectedTransactionId = null;
-  localStorage.removeItem(STORAGE_KEYS.accessToken);
-  localStorage.removeItem(STORAGE_KEYS.user);
 }
 
 async function apiRequest(path, options = {}) {
-  const headers = {
-    Accept: "application/json",
-    ...buildAuthHeaders(state.token),
-    ...(options.headers || {}),
-  };
-
-  if (options.body && !headers["Content-Type"]) {
-    headers["Content-Type"] = "application/json";
-  }
-
-  const response = await fetch(`${state.apiBaseUrl}${path}`, {
-    ...options,
-    headers,
-  });
-
+  const response = await fetch(`${state.apiBaseUrl}${path}`, options);
   if (!response.ok) {
     throw new Error(await parseApiError(response));
   }
-
   return response.json();
-}
-
-async function loadConsoleData() {
-  if (!state.token) {
-    return;
-  }
-
-  const [merchantData, transactionData, auditData] = await Promise.all([
-    apiRequest("/merchants?limit=100"),
-    apiRequest("/transactions?limit=100"),
-    apiRequest("/audit-events?limit=100"),
-  ]);
-
-  state.merchants = merchantData.merchants || [];
-  state.transactions = sortNewestFirst(transactionData.transactions || []);
-  state.auditEvents = sortNewestFirst(auditData.audit_events || []);
-
-  if (!state.selectedTransactionId && state.transactions.length > 0) {
-    state.selectedTransactionId = state.transactions[0].id;
-  }
 }
 
 async function withBusy(work, successMessage) {
@@ -214,113 +202,83 @@ async function withBusy(work, successMessage) {
     await work();
     state.message = successMessage || "";
   } catch (error) {
-    state.error = error instanceof Error ? error.message : "Something went wrong";
+    state.error = error instanceof Error ? error.message : "Request failed";
   } finally {
     state.busy = false;
     render();
   }
 }
 
-function handleApiBaseUrlSubmit(event) {
+function handleSettingsSubmit(event) {
   event.preventDefault();
   const form = new FormData(event.currentTarget);
   state.apiBaseUrl = normalizeApiBaseUrl(form.get("apiBaseUrl"));
+  state.authValue = String(form.get("authValue") || "");
   localStorage.setItem(STORAGE_KEYS.apiBaseUrl, state.apiBaseUrl);
-  state.message = "API base URL updated.";
+  state.message = "Connection settings updated. Bearer value stays in this tab.";
   state.error = "";
   render();
 }
 
-async function handleRegister(event) {
-  event.preventDefault();
-  const form = new FormData(event.currentTarget);
+async function handleHealthCheck() {
   await withBusy(async () => {
-    await apiRequest("/auth/register", {
-      method: "POST",
-      body: JSON.stringify({
-        email: form.get("email"),
-        password: form.get("password"),
-      }),
-    });
-  }, "User registered. You can log in now.");
-}
-
-async function handleLogin(event) {
-  event.preventDefault();
-  const form = new FormData(event.currentTarget);
-  await withBusy(async () => {
-    const data = await apiRequest("/auth/login", {
-      method: "POST",
-      body: JSON.stringify({
-        email: form.get("email"),
-        password: form.get("password"),
-      }),
-    });
-    persistSession({ accessToken: data.access_token, user: data.user });
-    await loadConsoleData();
-  }, "Logged in and console data loaded.");
-}
-
-async function handleRefresh() {
-  await withBusy(async () => {
-    await loadConsoleData();
-  }, "Console data refreshed.");
-}
-
-function handleLogout() {
-  clearSession();
-  state.message = "Logged out.";
-  state.error = "";
-  render();
-}
-
-async function handleCreateMerchant(event) {
-  event.preventDefault();
-  // BUG I JUST SPENT AN HOUR ON: i used to call event.currentTarget.reset() down inside the await callback,
-  // and it kept throwing "cannot read reset of null". turns out the browser NULLS OUT event.currentTarget
-  // the moment the event handler returns — and `await` makes us return early. so currentTarget is long gone
-  // by the time the api call finishes. fix = grab the actual <form> node NOW, while it still exists, into a var.
-  const formElement = event.currentTarget;
-  const form = new FormData(formElement);
-  await withBusy(async () => {
-    await apiRequest("/merchants", {
-      method: "POST",
-      body: JSON.stringify({
-        name: form.get("name"),
-        category: form.get("category"),
-        trust_status: form.get("trustStatus"),
-      }),
-    });
-    formElement.reset();
-    await loadConsoleData();
-  }, "Merchant created.");
+    await apiRequest("/healthz");
+    state.health = "ok";
+  }, "Health check passed.");
 }
 
 async function handleCreateTransaction(event) {
   event.preventDefault();
   const form = new FormData(event.currentTarget);
-  const idempotencyKey = String(form.get("idempotencyKey") || "");
+
   await withBusy(async () => {
-    const data = await apiRequest("/transactions", {
-      method: "POST",
-      headers: {
-        "Idempotency-Key": idempotencyKey,
-      },
-      body: JSON.stringify({
-        merchant_id: Number(form.get("merchantId")),
-        amount: form.get("amount"),
-        currency: form.get("currency"),
-      }),
+    const payload = buildTransactionPayload({
+      accountId: form.get("accountId"),
+      merchantId: form.get("merchantId"),
+      amountCents: form.get("amountCents"),
+      currency: form.get("currency"),
     });
-    state.selectedTransactionId = data.id;
+    const idempotencyKey = String(form.get("idempotencyKey") || "").trim();
+    const correlationId = String(form.get("correlationId") || "").trim();
+    if (!SAFE_TOKEN_PATTERN.test(idempotencyKey)) {
+      throw new Error("idempotency key must use safe characters only");
+    }
+    if (!SAFE_TOKEN_PATTERN.test(correlationId)) {
+      throw new Error("correlation id must use safe characters only");
+    }
+
+    const response = await apiRequest("/transactions", {
+      method: "POST",
+      headers: buildTransactionHeaders(state.authValue, idempotencyKey, correlationId),
+      body: JSON.stringify(payload),
+    });
+    const preview = riskPreview(payload.amount_cents);
+    state.receipts = [
+      {
+        transactionId: response.transaction_id,
+        status: response.status,
+        correlationId: response.correlation_id || correlationId,
+        idempotencyKey,
+        accountId: payload.account_id,
+        merchantId: payload.merchant_id,
+        amountCents: payload.amount_cents,
+        currency: payload.currency,
+        previewRisk: preview.level,
+        previewOutcome: preview.outcome,
+        previewReason: preview.reason,
+        createdAt: new Date().toISOString(),
+      },
+      ...state.receipts,
+    ].slice(0, 12);
     state.idempotencyKey = idempotencyKey;
-    await loadConsoleData();
-  }, "Transaction submitted.");
+    state.correlationId = response.correlation_id || correlationId;
+  }, "Transaction accepted as pending.");
 }
 
-function handleNewIdempotencyKey() {
-  state.idempotencyKey = createIdempotencyKey();
-  state.message = "New idempotency key generated.";
+function handleNewKeys() {
+  state.idempotencyKey = createSafeId("idem");
+  state.correlationId = createSafeId("trace");
+  state.message = "New idempotency and correlation IDs generated.";
   state.error = "";
   render();
 }
@@ -367,10 +325,11 @@ function el(tagName, attributes = {}, children = []) {
   return element;
 }
 
-function field(label, input) {
+function field(label, input, helper = null) {
   return el("label", { className: "field" }, [
     el("span", { text: label }),
     input,
+    helper ? el("small", { text: helper }) : null,
   ]);
 }
 
@@ -383,7 +342,8 @@ function textInput(name, options = {}) {
     min: options.min,
     step: options.step,
     required: options.required !== false,
-    autocomplete: options.autocomplete,
+    autocomplete: options.autocomplete || "off",
+    inputmode: options.inputmode,
   });
 }
 
@@ -408,53 +368,54 @@ function panel(title, children, actions = null) {
 }
 
 function renderShell() {
-  const summary = summarizeDecisions(state.transactions);
-
+  const summary = summarizeReceipts(state.receipts);
   return el("div", { className: "shell" }, [
+    el("a", { className: "skip-link", href: "#console", text: "Skip to console" }),
     el("header", { className: "topbar" }, [
       el("div", {}, [
         el("p", { className: "eyebrow", text: "Clearance" }),
-        el("h1", { text: "Operator Console" }),
-      ]),
-      el("div", { className: "session" }, [
-        el("span", {
-          className: "session-user",
-          text: state.user ? state.user.email : "No active session",
+        el("h1", { text: "Event authorization console" }),
+        el("p", {
+          className: "lede",
+          text: "Submit transactions to the Go platform and follow the idempotency and event-flow receipt.",
         }),
-        state.token ? button("Refresh", { onClick: handleRefresh }) : null,
-        state.token ? button("Log out", { className: "button button-secondary", onClick: handleLogout }) : null,
+      ]),
+      el("div", { className: "health-card" }, [
+        el("span", { className: statusClass(state.health === "ok" ? "AUTHORIZED" : "PENDING"), text: state.health }),
+        button("Check health", { className: "button button-secondary", onClick: handleHealthCheck }),
       ]),
     ]),
-    renderApiSettings(),
+    renderSettings(),
     renderNotice(),
-    state.token ? renderConsole(summary) : renderAuth(),
+    el("main", { id: "console", className: "console-grid" }, [
+      renderMetrics(summary),
+      renderTransactionPanel(),
+      renderFlowPanel(),
+      renderReceiptsPanel(),
+    ]),
   ]);
 }
 
-function renderApiSettings() {
-  return el("form", { className: "api-bar", onSubmit: handleApiBaseUrlSubmit }, [
-    field(
-      "API base URL",
-      textInput("apiBaseUrl", {
-        value: state.apiBaseUrl,
-        autocomplete: "url",
-      }),
-    ),
-    button("Set API", { type: "submit", className: "button button-secondary" }),
+function renderSettings() {
+  return el("form", { className: "api-bar", onSubmit: handleSettingsSubmit }, [
+    field("API base URL", textInput("apiBaseUrl", {
+      value: state.apiBaseUrl,
+      autocomplete: "url",
+    })),
+    field("Bearer value", textInput("authValue", {
+      type: "password",
+      value: state.authValue,
+      autocomplete: "off",
+    }), "Stored in memory only."),
+    button("Save settings", { type: "submit", className: "button button-secondary" }),
   ]);
 }
 
 function renderNotice() {
   if (!state.error && !state.message) {
-    if (state.token) {
-      return el("div", {
-        className: "notice notice-success",
-        text: "Live API connected. Review authorization decisions, retry behavior, and audit history.",
-      });
-    }
     return el("div", {
       className: "notice notice-muted",
-      text: "Connect to the local API, then log in to review live authorization behavior.",
+      text: "Start the Compose stack, set the local bearer value, then submit a LOW or HIGH risk transaction.",
     });
   }
   return el("div", {
@@ -463,45 +424,12 @@ function renderNotice() {
   });
 }
 
-function renderAuth() {
-  return el("main", { className: "auth-grid" }, [
-    panel("Log in", [
-      el("form", { className: "stack", onSubmit: handleLogin }, [
-        field("Email", textInput("email", { type: "email", autocomplete: "email" })),
-        field("Password", textInput("password", { type: "password", autocomplete: "current-password" })),
-        button("Log in", { type: "submit" }),
-      ]),
-    ]),
-    panel("Register", [
-      el("form", { className: "stack", onSubmit: handleRegister }, [
-        field("Email", textInput("email", { type: "email", autocomplete: "email" })),
-        field("Password", textInput("password", { type: "password", autocomplete: "new-password" })),
-        el("p", {
-          className: "hint",
-          text: "Password needs 8+ characters, a number, and a special character.",
-        }),
-        button("Create user", { type: "submit", className: "button button-secondary" }),
-      ]),
-    ]),
-  ]);
-}
-
-function renderConsole(summary) {
-  return el("main", { className: "console-grid" }, [
-    renderSummary(summary),
-    renderMerchantPanel(),
-    renderTransactionPanel(),
-    renderTransactionDetail(),
-    renderAuditPanel(),
-  ]);
-}
-
-function renderSummary(summary) {
+function renderMetrics(summary) {
   return el("section", { className: "metrics" }, [
-    metric("Transactions", summary.total),
-    metric("Approved", summary.approved),
-    metric("Review", summary.review),
-    metric("Declined", summary.declined),
+    metric("Receipts", summary.total),
+    metric("Pending replies", summary.pending),
+    metric("LOW preview", summary.lowRisk),
+    metric("HIGH preview", summary.highRisk),
   ]);
 }
 
@@ -512,121 +440,75 @@ function metric(label, value) {
   ]);
 }
 
-function renderMerchantPanel() {
-  return panel("Merchants", [
-    el("form", { className: "stack", onSubmit: handleCreateMerchant }, [
-      field("Name", textInput("name", { placeholder: "Summit Coffee" })),
-      field("Category", textInput("category", { placeholder: "food" })),
-      field(
-        "Trust status",
-        el("select", { name: "trustStatus" }, [
-          el("option", { value: "trusted", text: "trusted" }),
-          el("option", { value: "untrusted", text: "untrusted" }),
-        ]),
-      ),
-      button("Add merchant", { type: "submit" }),
-    ]),
-    renderMerchantList(),
-  ]);
-}
-
-function renderMerchantList() {
-  if (state.merchants.length === 0) {
-    return el("p", { className: "empty", text: "No merchants yet." });
-  }
-
-  return el("div", { className: "list" }, state.merchants.map((merchant) => {
-    return el("div", { className: "list-row" }, [
-      el("div", {}, [
-        el("strong", { text: merchant.name }),
-        el("span", { text: `${merchant.category} / ${merchant.trust_status}` }),
-      ]),
-      el("span", { className: "muted", text: `#${merchant.id}` }),
-    ]);
-  }));
-}
-
 function renderTransactionPanel() {
-  const hasMerchants = state.merchants.length > 0;
-
-  return panel("Create Transaction", [
-    hasMerchants
-      ? el("form", { className: "stack", onSubmit: handleCreateTransaction }, [
-          field(
-            "Merchant",
-            el("select", { name: "merchantId" }, state.merchants.map((merchant) => {
-              return el("option", { value: String(merchant.id), text: `${merchant.name} #${merchant.id}` });
-            })),
-          ),
-          field("Amount", textInput("amount", { type: "number", min: "0.01", step: "0.01", placeholder: "125.50" })),
-          field("Currency", textInput("currency", { value: "USD", placeholder: "USD" })),
-          field("Idempotency key", textInput("idempotencyKey", { value: state.idempotencyKey })),
-          button("New key", {
-            className: "button button-secondary",
-            onClick: handleNewIdempotencyKey,
-          }),
-          el("p", {
-            className: "hint",
-            text: "Submit once, then submit again with the same key and payload to see the safe retry path.",
-          }),
-          button("Submit transaction", { type: "submit" }),
-        ])
-      : el("p", { className: "empty", text: "Create a merchant before submitting a transaction." }),
-    renderTransactionList(),
-  ]);
-}
-
-function renderTransactionList() {
-  if (state.transactions.length === 0) {
-    return el("p", { className: "empty", text: "No transactions yet." });
-  }
-
-  return el("div", { className: "table-wrap" }, [
-    el("table", {}, [
-      el("thead", {}, [
-        el("tr", {}, [
-          el("th", { text: "ID" }),
-          el("th", { text: "Amount" }),
-          el("th", { text: "Decision" }),
-          el("th", { text: "Risk" }),
-          el("th", { text: "Created" }),
-        ]),
+  return panel("Submit transaction", [
+    el("form", { className: "stack", onSubmit: handleCreateTransaction }, [
+      field("Account ID", textInput("accountId", { value: "acct_123" })),
+      field("Merchant ID", textInput("merchantId", { value: "merchant_123" })),
+      field("Amount cents", textInput("amountCents", {
+        type: "number",
+        min: "1",
+        step: "1",
+        inputmode: "numeric",
+        value: "12550",
+      }), "Use 50001 or higher to preview HIGH risk."),
+      field("Currency", textInput("currency", { value: "USD" })),
+      field("Idempotency key", textInput("idempotencyKey", { value: state.idempotencyKey })),
+      field("Correlation ID", textInput("correlationId", { value: state.correlationId })),
+      el("div", { className: "button-row" }, [
+        button("Submit", { type: "submit" }),
+        button("New IDs", {
+          className: "button button-secondary",
+          onClick: handleNewKeys,
+        }),
       ]),
-      el("tbody", {}, state.transactions.map((transaction) => {
-        return el("tr", {
-          className: transaction.id === state.selectedTransactionId ? "selected-row" : "",
-          onClick: () => {
-            state.selectedTransactionId = transaction.id;
-            render();
-          },
-        }, [
-          el("td", { text: `#${transaction.id}` }),
-          el("td", { text: formatCurrency(transaction.amount, transaction.currency) }),
-          el("td", {}, [el("span", { className: decisionClass(transaction.status), text: transaction.status })]),
-          el("td", { text: String(transaction.risk_score) }),
-          el("td", { text: formatDateTime(transaction.created_at) }),
-        ]);
-      })),
     ]),
   ]);
 }
 
-function renderTransactionDetail() {
-  const selected = state.transactions.find((transaction) => {
-    return transaction.id === state.selectedTransactionId;
-  });
+function renderFlowPanel() {
+  return panel("Platform flow", [
+    el("ol", { className: "flow-list" }, [
+      flowStep("Transaction Service", "Validates input, checks Redis rate limit, records PENDING and writes TransactionCreated to the outbox."),
+      flowStep("Outbox Publisher", "Publishes TransactionCreated to Redpanda and marks the outbox row published."),
+      flowStep("Risk Service", "Consumes the event. Amounts over 500.00 become HIGH risk."),
+      flowStep("Ledger Service", "Writes balanced ledger entries for LOW risk and emits the final transaction event."),
+      flowStep("Notification Service", "Consumes authorized events and records a simulated webhook audit log."),
+    ]),
+  ]);
+}
 
-  return panel("Decision Detail", [
-    selected
-      ? el("dl", { className: "detail-list" }, [
-          detail("Transaction", `#${selected.id}`),
-          detail("Merchant", `#${selected.merchant_id}`),
-          detail("Status", selected.status),
-          detail("Risk score", String(selected.risk_score)),
-          detail("Reason", selected.decision_reason),
-          detail("Created", formatDateTime(selected.created_at)),
-        ])
-      : el("p", { className: "empty", text: "Select a transaction to inspect the authorization decision." }),
+function flowStep(title, body) {
+  return el("li", {}, [
+    el("strong", { text: title }),
+    el("span", { text: body }),
+  ]);
+}
+
+function renderReceiptsPanel() {
+  return panel("Local receipts", [
+    state.receipts.length === 0
+      ? el("p", { className: "empty", text: "No local receipts yet. Submit a transaction to see the accepted response." })
+      : el("div", { className: "receipt-list" }, state.receipts.map(renderReceipt)),
+  ]);
+}
+
+function renderReceipt(receipt) {
+  return el("article", { className: "receipt" }, [
+    el("div", { className: "receipt-topline" }, [
+      el("strong", { text: receipt.transactionId || "Transaction pending" }),
+      el("span", { className: statusClass(receipt.status), text: receipt.status || "PENDING" }),
+    ]),
+    el("div", { className: "receipt-grid" }, [
+      detail("Amount", formatAmountCents(receipt.amountCents, receipt.currency)),
+      detail("Preview", `${receipt.previewRisk} risk, ${receipt.previewOutcome}`),
+      detail("Correlation", receipt.correlationId),
+      detail("Idempotency", receipt.idempotencyKey),
+      detail("Account", receipt.accountId),
+      detail("Merchant", receipt.merchantId),
+      detail("Created", formatDateTime(receipt.createdAt)),
+      detail("Reason", receipt.previewReason),
+    ]),
   ]);
 }
 
@@ -634,22 +516,6 @@ function detail(term, description) {
   return el("div", {}, [
     el("dt", { text: term }),
     el("dd", { text: description }),
-  ]);
-}
-
-function renderAuditPanel() {
-  return panel("Audit Events", [
-    state.auditEvents.length === 0
-      ? el("p", { className: "empty", text: "No audit events yet." })
-      : el("div", { className: "list audit-list" }, state.auditEvents.map((event) => {
-          return el("div", { className: "list-row" }, [
-            el("div", {}, [
-              el("strong", { text: event.action }),
-              el("span", { text: `${event.entity_type} ${event.entity_id || ""}`.trim() }),
-            ]),
-            el("span", { className: "muted", text: formatDateTime(event.created_at) }),
-          ]);
-        })),
   ]);
 }
 
@@ -661,16 +527,8 @@ function render() {
   root.replaceChildren(renderShell());
 }
 
-async function boot() {
+function boot() {
   loadStateFromStorage();
-  if (state.token) {
-    try {
-      await loadConsoleData();
-    } catch {
-      clearSession();
-      state.error = "Saved session could not be restored. Please log in again.";
-    }
-  }
   render();
 }
 

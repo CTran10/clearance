@@ -1,27 +1,31 @@
-# Clearance Frontend POC
+# Clearance Event Console
 
-This is a small dependency-free operator console for the Clearance FastAPI backend.
-It is intentionally thin: the goal is to make the backend behavior visible for a
-portfolio reviewer, not to become a second full application.
+This is a dependency-free frontend proof of concept for the Go-based Clearance
+authorization platform. It gives reviewers one small browser surface for the
+backend MVP: health checks, authenticated transaction submission, idempotency
+keys, correlation IDs, and a local receipt trail.
+
+The console is intentionally thin. It does not replace the backend event log,
+ledger, or audit data. It only makes the distributed flow easier to demo.
 
 ## Scope
 
-- Register and log in.
-- Store a local demo bearer token in `localStorage`.
-- Create and list merchants.
-- Create transactions with an explicit `Idempotency-Key`.
-- Show transaction decision status, risk score, and decision reason.
-- List audit events for the logged-in user.
+- Submit `POST /transactions` requests to the Transaction Service.
+- Send `Authorization`, `Idempotency-Key`, and `X-Correlation-ID` headers.
+- Preview the same risk threshold used by the Risk Service.
+- Keep the bearer value in memory only, not `localStorage`.
+- Store only the API base URL locally.
+- Show local receipts for accepted PENDING responses.
 
 ## Run Locally
 
-Start the API from the repo root:
+Start the platform from the repository root:
 
 ```bash
-.venv/bin/uvicorn app.main:app --reload
+docker compose up --build
 ```
 
-Serve the frontend from this directory:
+Serve this directory:
 
 ```bash
 python3 -m http.server 5173
@@ -33,13 +37,15 @@ Open:
 http://127.0.0.1:5173
 ```
 
-The default API base URL is `http://127.0.0.1:8000`. If the browser blocks API
-calls because of CORS, add the frontend origin to `CORS_ORIGINS` in your local
-environment:
+The default API base URL is `http://127.0.0.1:8080`. If the browser blocks API
+calls, allow the frontend origin in the root `.env` file:
 
 ```env
 CORS_ORIGINS=http://127.0.0.1:5173
 ```
+
+Set the local bearer value in the console to match
+`TRANSACTION_API_AUTH_VALUE`.
 
 ## Test
 
