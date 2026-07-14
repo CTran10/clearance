@@ -62,5 +62,23 @@ create table if not exists dead_letter_replay_attempts (
     completed_at timestamptz
 );
 
+with duplicate_pending as (
+    select id,
+           row_number() over (partition by dead_letter_id order by created_at, id) as attempt_order
+      from dead_letter_replay_attempts
+     where result = 'PENDING'
+)
+update dead_letter_replay_attempts attempts
+   set result = 'FAILED',
+       error_message = 'superseded while enforcing one pending replay per dead letter',
+       completed_at = now()
+  from duplicate_pending duplicate
+ where attempts.id = duplicate.id
+   and duplicate.attempt_order > 1;
+
+create unique index if not exists ux_dead_letter_replay_attempts_pending
+    on dead_letter_replay_attempts (dead_letter_id)
+    where result = 'PENDING';
+
 create index if not exists ix_dead_letter_replay_attempts_message_created
     on dead_letter_replay_attempts (dead_letter_id, created_at desc);

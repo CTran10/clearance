@@ -115,7 +115,7 @@ cleanup() {
     compose ps >&2 || true
     compose logs --tail=120 app outbox-publisher risk-service ledger-service redpanda >&2 || true
   fi
-  compose down --volumes --remove-orphans >/dev/null 2>&1 || true
+  compose down --volumes --remove-orphans --rmi local >/dev/null 2>&1 || true
   exit "$status"
 }
 trap cleanup EXIT INT TERM

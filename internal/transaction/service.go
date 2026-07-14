@@ -137,6 +137,8 @@ func validate(request CreateRequest, metadata RequestMetadata) (CreateRequest, e
 
 	if !safeTokenPattern.MatchString(metadata.IdempotencyKey) ||
 		!safeTokenPattern.MatchString(request.AccountID) ||
+		request.AccountID == "clearing" ||
+		request.AccountID == "external-settlement" ||
 		!safeTokenPattern.MatchString(request.MerchantID) ||
 		!currencyPattern.MatchString(request.Currency) ||
 		request.AmountCents <= 0 {

@@ -32,7 +32,7 @@ begin
         select 1 from pg_constraint where conname = 'transactions_external_account_check'
     ) then
         alter table transactions add constraint transactions_external_account_check
-            check (account_id not in ('clearing', 'external-settlement'));
+            check (account_id not in ('clearing', 'external-settlement')) not valid;
     end if;
 end
 $$;

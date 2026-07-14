@@ -289,15 +289,43 @@ func (s *Store) IsEventProcessed(ctx context.Context, eventID string) (bool, err
 
 func (s *Store) StartDeadLetterReplay(ctx context.Context, id, reason string) (string, error) {
 	attemptID := domain.NewID("replay")
-	if _, err := s.pool.Exec(
+	dbtx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return "", fmt.Errorf("begin dead letter replay attempt: %w", err)
+	}
+	defer func() { _ = dbtx.Rollback(ctx) }()
+	if _, err := dbtx.Exec(
+		ctx,
+		`update dead_letter_replay_attempts
+		    set result = 'FAILED',
+		        error_message = 'stale pending replay recovered',
+		        completed_at = now()
+		  where dead_letter_id = $1
+		    and result = 'PENDING'
+		    and created_at < now() - interval '5 minutes'`,
+		id,
+	); err != nil {
+		return "", fmt.Errorf("recover stale dead letter replay attempt: %w", err)
+	}
+	tag, err := dbtx.Exec(
 		ctx,
 		`insert into dead_letter_replay_attempts (id, dead_letter_id, reason)
-		 values ($1, $2, $3)`,
+		 select $1, dead.id, $3
+		   from dead_letter_messages dead
+		  where dead.id = $2 and dead.state = 'OPEN'
+		 on conflict do nothing`,
 		attemptID,
 		id,
 		reason,
-	); err != nil {
+	)
+	if err != nil {
 		return "", fmt.Errorf("insert dead letter replay attempt: %w", err)
+	}
+	if tag.RowsAffected() != 1 {
+		return "", operations.ErrInvalidState
+	}
+	if err := dbtx.Commit(ctx); err != nil {
+		return "", fmt.Errorf("commit dead letter replay attempt: %w", err)
 	}
 	return attemptID, nil
 }
@@ -328,14 +356,18 @@ func (s *Store) FinishDeadLetterReplay(
 		return fmt.Errorf("finish dead letter replay attempt: %w", err)
 	}
 	if result == operations.ReplayPublished {
-		if _, err := dbtx.Exec(
+		tag, err := dbtx.Exec(
 			ctx,
 			`update dead_letter_messages
 			    set state = 'REPUBLISHED', replay_count = replay_count + 1, version = version + 1
 			  where id = $1 and state = 'OPEN'`,
 			deadLetterID,
-		); err != nil {
+		)
+		if err != nil {
 			return fmt.Errorf("mark dead letter republished: %w", err)
+		}
+		if tag.RowsAffected() != 1 {
+			return operations.ErrInvalidState
 		}
 		if _, err := dbtx.Exec(
 			ctx,

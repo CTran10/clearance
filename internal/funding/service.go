@@ -146,13 +146,16 @@ func (s *Service) Deposit(ctx context.Context, request DepositRequest, metadata 
 	if err == nil {
 		return response, nil
 	}
-	if errors.Is(err, ErrIdempotencyConflict) {
+	if errors.Is(err, ErrIdempotencyConflict) || errors.Is(err, ErrExternalReferenceConflict) {
 		existing, ok, findErr := s.store.FindDepositIdempotency(ctx, metadata.IdempotencyKey)
 		if findErr != nil {
 			return DepositResponse{}, fmt.Errorf("find deposit idempotency key after conflict: %w", findErr)
 		}
 		if ok && existing.RequestHash == requestHash {
 			return existing.Response, nil
+		}
+		if ok {
+			return DepositResponse{}, ErrIdempotencyConflict
 		}
 	}
 	return DepositResponse{}, fmt.Errorf("create deposit: %w", err)
