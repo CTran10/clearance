@@ -30,6 +30,9 @@ func (s *Store) SaveConsumerOutbox(
 		return false, err
 	}
 	if !claimed {
+		if err := dbtx.Commit(ctx); err != nil {
+			return false, fmt.Errorf("commit duplicate consumer event: %w", err)
+		}
 		return false, nil
 	}
 	if err := insertOutbox(ctx, dbtx, event); err != nil {
@@ -60,6 +63,9 @@ func (s *Store) ProcessRiskEvaluated(
 		return false, err
 	}
 	if !claimed {
+		if err := dbtx.Commit(ctx); err != nil {
+			return false, fmt.Errorf("commit duplicate ledger event: %w", err)
+		}
 		return false, nil
 	}
 
