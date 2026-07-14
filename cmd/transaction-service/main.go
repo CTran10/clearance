@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/CTran10/clearance/internal/appenv"
+	"github.com/CTran10/clearance/internal/funding"
 	"github.com/CTran10/clearance/internal/httpapi"
 	"github.com/CTran10/clearance/internal/postgres"
 	"github.com/CTran10/clearance/internal/redislimiter"
@@ -37,15 +38,22 @@ func main() {
 		_ = limiter.Close()
 	}()
 
+	transactionService := transaction.NewService(store)
 	handler := httpapi.NewRouter(
-		transaction.NewService(store),
+		transactionService,
 		limiter,
 		httpapi.Config{
 			AuthValue:         appenv.Must("TRANSACTION_API_AUTH_VALUE"),
+			FundingAuthValue:  appenv.Must("FUNDING_API_AUTH_VALUE"),
+			OperatorAuthValue: appenv.Must("OPERATOR_API_AUTH_VALUE"),
 			AllowedOrigins:    appenv.CSV("CORS_ORIGINS", nil),
 			TrustForwardedFor: appenv.Bool("TRUST_X_FORWARDED_FOR", false),
 			MetricsEnabled:    appenv.Bool("METRICS_ENABLED", false),
 		},
+		httpapi.WithQueryService(transaction.NewQueryService(store)),
+		httpapi.WithFundingService(funding.NewService(store, funding.Config{
+			MaxAmountCents: int64(appenv.Int("FUNDING_MAX_AMOUNT_CENTS", 100_000_000)),
+		})),
 	)
 	server := &http.Server{
 		Addr:              ":" + appenv.String("PORT", "8080"),

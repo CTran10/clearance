@@ -81,4 +81,6 @@ jobs:
         env:
           POSTGRES_PASSWORD: ci-local-placeholder
           TRANSACTION_API_AUTH_VALUE: ci-local-placeholder
+          FUNDING_API_AUTH_VALUE: ci-funding-placeholder
+          OPERATOR_API_AUTH_VALUE: ci-operator-placeholder
         run: docker compose config --quiet

@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/CTran10/clearance/internal/domain"
+	"github.com/CTran10/clearance/internal/funding"
 	"github.com/CTran10/clearance/internal/metrics"
 	"github.com/CTran10/clearance/internal/transaction"
 )
@@ -23,6 +24,8 @@ var safeHeaderPattern = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,128}$`)
 
 type Config struct {
 	AuthValue         string
+	FundingAuthValue  string
+	OperatorAuthValue string
 	AllowedOrigins    []string
 	MaxBodyBytes      int64
 	TrustForwardedFor bool
@@ -34,16 +37,36 @@ type RateLimiter interface {
 }
 
 type Router struct {
-	service *transaction.Service
-	limiter RateLimiter
-	config  Config
+	service        *transaction.Service
+	queries        *transaction.QueryService
+	fundingService *funding.Service
+	limiter        RateLimiter
+	config         Config
 }
 
-func NewRouter(service *transaction.Service, limiter RateLimiter, config Config) http.Handler {
+type Option func(*Router)
+
+func WithQueryService(service *transaction.QueryService) Option {
+	return func(router *Router) {
+		router.queries = service
+	}
+}
+
+func WithFundingService(service *funding.Service) Option {
+	return func(router *Router) {
+		router.fundingService = service
+	}
+}
+
+func NewRouter(service *transaction.Service, limiter RateLimiter, config Config, options ...Option) http.Handler {
 	if config.MaxBodyBytes <= 0 {
 		config.MaxBodyBytes = defaultMaxBodyBytes
 	}
-	return &Router{service: service, limiter: limiter, config: config}
+	router := &Router{service: service, limiter: limiter, config: config}
+	for _, option := range options {
+		option(router)
+	}
+	return router
 }
 
 func (r *Router) ServeHTTP(response http.ResponseWriter, request *http.Request) {
@@ -79,11 +102,27 @@ func (r *Router) serveHTTP(response http.ResponseWriter, request *http.Request) 
 		writeJSON(response, http.StatusOK, map[string]string{"status": "ok"})
 		return
 	}
-	if request.URL.Path != "/transactions" || request.Method != http.MethodPost {
-		writeError(response, http.StatusNotFound, "not found")
+
+	if request.URL.Path == "/transactions" {
+		switch request.Method {
+		case http.MethodPost:
+			r.createTransaction(response, request)
+		case http.MethodGet:
+			r.listTransactions(response, request)
+		default:
+			writeError(response, http.StatusNotFound, "not found")
+		}
 		return
 	}
-	r.createTransaction(response, request)
+	if transactionID, ok := transactionIDFromPath(request.URL.Path); ok && request.Method == http.MethodGet {
+		r.getTransaction(response, request, transactionID)
+		return
+	}
+	if accountID, ok := depositAccountFromPath(request.URL.Path); ok && request.Method == http.MethodPost {
+		r.createDeposit(response, request, accountID)
+		return
+	}
+	writeError(response, http.StatusNotFound, "not found")
 }
 
 func (r *Router) createTransaction(response http.ResponseWriter, request *http.Request) {
@@ -150,6 +189,138 @@ func (r *Router) createTransaction(response http.ResponseWriter, request *http.R
 	})
 }
 
+func (r *Router) getTransaction(response http.ResponseWriter, request *http.Request, transactionID string) {
+	if r.queries == nil {
+		writeError(response, http.StatusNotFound, "not found")
+		return
+	}
+	authorization := request.Header.Get("Authorization")
+	if !authorized(authorization, r.config.AuthValue) && !authorized(authorization, r.config.OperatorAuthValue) {
+		writeError(response, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	if !r.allowRequest(response, request) {
+		return
+	}
+	detail, err := r.queries.Get(request.Context(), transactionID)
+	if err != nil {
+		switch {
+		case errors.Is(err, transaction.ErrInvalidQuery):
+			writeError(response, http.StatusBadRequest, "invalid request")
+		case errors.Is(err, transaction.ErrNotFound):
+			writeError(response, http.StatusNotFound, "transaction not found")
+		default:
+			writeError(response, http.StatusInternalServerError, "internal error")
+		}
+		return
+	}
+	writeJSON(response, http.StatusOK, detail)
+}
+
+func (r *Router) listTransactions(response http.ResponseWriter, request *http.Request) {
+	if r.queries == nil {
+		writeError(response, http.StatusNotFound, "not found")
+		return
+	}
+	if !authorized(request.Header.Get("Authorization"), r.config.OperatorAuthValue) {
+		writeError(response, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	if !r.allowRequest(response, request) {
+		return
+	}
+	limit := 0
+	if rawLimit := request.URL.Query().Get("limit"); rawLimit != "" {
+		parsed, err := strconv.Atoi(rawLimit)
+		if err != nil {
+			writeError(response, http.StatusBadRequest, "invalid request")
+			return
+		}
+		limit = parsed
+	}
+	page, err := r.queries.List(request.Context(), transaction.ListFilter{
+		AccountID: request.URL.Query().Get("account_id"),
+		Status:    domain.TransactionStatus(request.URL.Query().Get("status")),
+		Kind:      domain.TransactionKind(request.URL.Query().Get("kind")),
+		Limit:     limit,
+		Cursor:    request.URL.Query().Get("cursor"),
+	})
+	if err != nil {
+		if errors.Is(err, transaction.ErrInvalidQuery) {
+			writeError(response, http.StatusBadRequest, "invalid request")
+		} else {
+			writeError(response, http.StatusInternalServerError, "internal error")
+		}
+		return
+	}
+	writeJSON(response, http.StatusOK, page)
+}
+
+func (r *Router) createDeposit(response http.ResponseWriter, request *http.Request, accountID string) {
+	if r.fundingService == nil {
+		writeError(response, http.StatusNotFound, "not found")
+		return
+	}
+	if !authorized(request.Header.Get("Authorization"), r.config.FundingAuthValue) {
+		writeError(response, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	if !r.allowRequest(response, request) {
+		return
+	}
+	var payload struct {
+		AmountCents       int64  `json:"amount_cents"`
+		Currency          string `json:"currency"`
+		FundingSource     string `json:"funding_source"`
+		ExternalReference string `json:"external_reference"`
+		OperatorReason    string `json:"operator_reason"`
+	}
+	request.Body = http.MaxBytesReader(response, request.Body, r.config.MaxBodyBytes)
+	decoder := json.NewDecoder(request.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&payload); err != nil {
+		writeError(response, http.StatusBadRequest, "invalid request")
+		return
+	}
+	result, err := r.fundingService.Deposit(
+		request.Context(),
+		funding.DepositRequest{
+			AccountID: accountID, AmountCents: payload.AmountCents, Currency: payload.Currency,
+			FundingSource: payload.FundingSource, ExternalReference: payload.ExternalReference,
+		},
+		funding.RequestMetadata{
+			IdempotencyKey: request.Header.Get("Idempotency-Key"),
+			CorrelationID:  request.Header.Get("X-Correlation-ID"),
+			OperatorReason: payload.OperatorReason,
+		},
+	)
+	if err != nil {
+		switch {
+		case errors.Is(err, funding.ErrInvalidRequest):
+			writeError(response, http.StatusBadRequest, "invalid request")
+		case errors.Is(err, funding.ErrIdempotencyConflict), errors.Is(err, funding.ErrExternalReferenceConflict):
+			writeError(response, http.StatusConflict, "deposit conflict")
+		default:
+			writeError(response, http.StatusInternalServerError, "internal error")
+		}
+		return
+	}
+	writeJSON(response, http.StatusCreated, result)
+}
+
+func (r *Router) allowRequest(response http.ResponseWriter, request *http.Request) bool {
+	allowed, err := r.limiter.Allow(request.Context(), rateLimitKey(request, r.config.TrustForwardedFor))
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "internal error")
+		return false
+	}
+	if !allowed {
+		writeError(response, http.StatusTooManyRequests, "rate limit exceeded")
+		return false
+	}
+	return true
+}
+
 func (r *Router) writeServiceError(response http.ResponseWriter, err error) {
 	// one place to turn internal errors into http status codes. errors.Is "unwraps" the chain to find a sentinel
 	// even if it got wrapped 3 layers deep with %w — that's why i wrapped instead of stringifying earlier.
@@ -175,7 +346,7 @@ func (r *Router) setBaseHeaders(response http.ResponseWriter, request *http.Requ
 			response.Header().Set("Access-Control-Allow-Origin", origin)
 			response.Header().Set("Vary", "Origin")
 			response.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, Idempotency-Key, X-Correlation-ID")
-			response.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
+			response.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 			return
 		}
 	}
@@ -185,9 +356,33 @@ func metricPath(request *http.Request) string {
 	switch request.URL.Path {
 	case "/healthz", "/transactions":
 		return request.URL.Path
-	default:
-		return "/unknown"
 	}
+	if _, ok := transactionIDFromPath(request.URL.Path); ok {
+		return "/transactions/{id}"
+	}
+	if _, ok := depositAccountFromPath(request.URL.Path); ok {
+		return "/accounts/{id}/deposits"
+	}
+	return "/unknown"
+}
+
+func transactionIDFromPath(path string) (string, bool) {
+	const prefix = "/transactions/"
+	if !strings.HasPrefix(path, prefix) {
+		return "", false
+	}
+	id := strings.TrimPrefix(path, prefix)
+	return id, id != "" && !strings.Contains(id, "/")
+}
+
+func depositAccountFromPath(path string) (string, bool) {
+	const prefix = "/accounts/"
+	const suffix = "/deposits"
+	if !strings.HasPrefix(path, prefix) || !strings.HasSuffix(path, suffix) {
+		return "", false
+	}
+	accountID := strings.TrimSuffix(strings.TrimPrefix(path, prefix), suffix)
+	return accountID, accountID != "" && !strings.Contains(accountID, "/")
 }
 
 func authorized(header string, expected string) bool {

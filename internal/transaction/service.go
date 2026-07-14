@@ -82,6 +82,7 @@ func (s *Service) Create(ctx context.Context, request CreateRequest, metadata Re
 
 	transaction := domain.Transaction{
 		ID:            domain.NewID("txn"),
+		Kind:          domain.TransactionPayment,
 		AccountID:     normalized.AccountID,
 		MerchantID:    normalized.MerchantID,
 		AmountCents:   normalized.AmountCents,
@@ -89,6 +90,7 @@ func (s *Service) Create(ctx context.Context, request CreateRequest, metadata Re
 		Status:        domain.TransactionPending,
 		CorrelationID: metadata.CorrelationID,
 		CreatedAt:     time.Now().UTC(),
+		UpdatedAt:     time.Now().UTC(),
 	}
 	response := CreateResponse{
 		TransactionID: transaction.ID,

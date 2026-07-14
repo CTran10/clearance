@@ -19,6 +19,7 @@ const (
 	TopicRiskEvaluated         = "risk.evaluated"
 	TopicTransactionAuthorized = "transactions.authorized"
 	TopicTransactionFailed     = "transactions.failed"
+	TopicFundsDeposited        = "funding.deposited"
 	TopicDeadLetter            = "dead-letter"
 )
 
@@ -188,6 +189,8 @@ func TopicFor(eventType domain.EventType) string {
 		return TopicTransactionAuthorized
 	case domain.EventTransactionFailed:
 		return TopicTransactionFailed
+	case domain.EventFundsDeposited:
+		return TopicFundsDeposited
 	default:
 		return TopicDeadLetter
 	}

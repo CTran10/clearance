@@ -21,6 +21,13 @@ const (
 	TransactionFailed     TransactionStatus = "FAILED"
 )
 
+type TransactionKind string
+
+const (
+	TransactionPayment TransactionKind = "PAYMENT"
+	TransactionDeposit TransactionKind = "DEPOSIT"
+)
+
 type RiskLevel string
 
 const (
@@ -35,6 +42,7 @@ const (
 	EventRiskEvaluated         EventType = "RiskEvaluated"
 	EventTransactionAuthorized EventType = "TransactionAuthorized"
 	EventTransactionFailed     EventType = "TransactionFailed"
+	EventFundsDeposited        EventType = "FundsDeposited"
 )
 
 type OutboxStatus string
@@ -72,13 +80,19 @@ func EvaluateRisk(amountCents int64) RiskEvaluation {
 
 type Transaction struct {
 	ID            string            `json:"id"`
+	Kind          TransactionKind   `json:"kind"`
 	AccountID     string            `json:"account_id"`
-	MerchantID    string            `json:"merchant_id"`
+	MerchantID    string            `json:"merchant_id,omitempty"`
+	FundingSource string            `json:"funding_source,omitempty"`
+	ExternalRef   string            `json:"external_reference,omitempty"`
 	AmountCents   int64             `json:"amount_cents"`
 	Currency      string            `json:"currency"`
 	Status        TransactionStatus `json:"status"`
+	RiskLevel     RiskLevel         `json:"risk_level,omitempty"`
+	RiskReason    string            `json:"risk_reason,omitempty"`
 	CorrelationID string            `json:"correlation_id"`
 	CreatedAt     time.Time         `json:"created_at"`
+	UpdatedAt     time.Time         `json:"updated_at"`
 }
 
 type OutboxEvent struct {
@@ -121,6 +135,16 @@ type RiskEvaluated struct {
 	Approved      bool      `json:"approved"`
 	Reason        string    `json:"reason"`
 	CorrelationID string    `json:"correlation_id"`
+}
+
+type FundsDeposited struct {
+	DepositID         string `json:"deposit_id"`
+	AccountID         string `json:"account_id"`
+	AmountCents       int64  `json:"amount_cents"`
+	Currency          string `json:"currency"`
+	FundingSource     string `json:"funding_source"`
+	ExternalReference string `json:"external_reference"`
+	CorrelationID     string `json:"correlation_id"`
 }
 
 type LedgerEntry struct {
