@@ -31,6 +31,8 @@ Set local values for:
 ```env
 POSTGRES_PASSWORD=
 TRANSACTION_API_AUTH_VALUE=
+FUNDING_API_AUTH_VALUE=
+OPERATOR_API_AUTH_VALUE=
 ```
 
 Start the platform:
@@ -48,6 +50,23 @@ curl -i http://127.0.0.1:8082/healthz
 curl -i http://127.0.0.1:8083/healthz
 ```
 
+Fund a local/demo account before authorizing a payment:
+
+```sh
+curl -i http://127.0.0.1:8080/accounts/acct_123/deposits \
+  -H "Authorization: Bearer $FUNDING_API_AUTH_VALUE" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: funding-local-1" \
+  -H "X-Correlation-ID: trace-funding-1" \
+  -d '{
+    "amount_cents":50000,
+    "currency":"USD",
+    "funding_source":"local-demo",
+    "external_reference":"local-funding-1",
+    "operator_reason":"seed account for local authorization testing"
+  }'
+```
+
 Submit a transaction:
 
 ```sh
@@ -62,6 +81,13 @@ curl -i http://127.0.0.1:8080/transactions \
     "amount_cents":12550,
     "currency":"USD"
   }'
+```
+
+Read its eventual status using the returned `transaction_id`:
+
+```sh
+curl -i http://127.0.0.1:8080/transactions/txn_123 \
+  -H "Authorization: Bearer $TRANSACTION_API_AUTH_VALUE"
 ```
 
 Optional frontend console:
@@ -95,11 +121,24 @@ The Compose stack starts:
 * Redis
 * Redpanda
 
-The only business-facing endpoint is:
+The business-facing endpoints are:
 
 ```http
 POST /transactions
+GET /transactions/{transaction_id}
+POST /accounts/{account_id}/deposits
 ```
+
+The operator-only query endpoint is:
+
+```http
+GET /transactions?account_id=&status=&kind=&limit=&cursor=
+```
+
+List queries require `OPERATOR_API_AUTH_VALUE`. Deposits require the separate
+`FUNDING_API_AUTH_VALUE`, an idempotency key, an external reference, and an
+operator reason. A deposit is an operator/demo funding mechanism, not an
+integration with a bank, card network, or settlement provider.
 
 Requests require:
 
@@ -250,8 +289,11 @@ Publishers and consumers automatically retry transient failures.
 
 Outbox rows that exceed retry limits are marked `DEAD_LETTERED` in PostgreSQL.
 Consumed Kafka messages that exhaust handler retries are published to the Kafka
-dead-letter topic before their source offset is committed. Neither path promises
-exactly-once dead-letter delivery.
+dead-letter topic before their source offset is committed. The exact original
+key, headers, and payload bytes are first persisted in PostgreSQL with source
+topic/partition/offset and the sanitized final error. Kafka DLQ publication is
+still at-least-once, while the PostgreSQL record has a deterministic source
+identity and is safe to inspect or replay through `clearance-admin`.
 
 ### Correlation IDs
 
@@ -275,7 +317,19 @@ for monitoring and orchestration.
 
 ### Metrics
 
-Set `METRICS_ENABLED=true` to expose basic Prometheus counters on `/metrics`.
+Set `METRICS_ENABLED=true` to expose typed Prometheus counters, histograms, Go
+runtime metrics, outbox/DLQ/processed-event gauges, and PostgreSQL pool gauges on
+`/metrics`. Labels are bounded to service, normalized route, status, topic,
+consumer, and result; transaction/account/event IDs are deliberately excluded.
+
+Start the provisioned Prometheus alerts and Grafana operations dashboard with:
+
+```sh
+docker compose --profile observability up --build
+```
+
+Prometheus listens on `127.0.0.1:9090` and Grafana on `127.0.0.1:3000` by
+default. Both are local-only bindings in this Compose setup.
 
 ## Security Considerations
 
@@ -303,6 +357,7 @@ Run tests:
 
 ```sh
 go test ./...
+go test -tags=integration ./internal/postgres
 ```
 
 Run vet:
@@ -317,6 +372,17 @@ Validate Compose:
 docker compose config
 ```
 
+Run the destructive, isolated real-broker suite:
+
+```sh
+./scripts/broker-failure-suite.sh
+```
+
+The suite creates its own Compose project and ephemeral host ports, verifies
+duplicate delivery, forces a Redpanda outage and audited outbox recovery,
+injects malformed bytes, inspects the durable DLQ record, and removes its test
+volumes on exit. Do not point it at shared infrastructure.
+
 The test suite covers:
 
 * Idempotency behavior
@@ -324,8 +390,12 @@ The test suite covers:
 * Transactional outbox creation
 * Outbox retry logic
 * Dead-letter handling
+* Exact DLQ payload persistence and replay safety
+* Processed-event retention guards and bounded pruning
 * Risk evaluation rules
 * Ledger entry creation
+* Funding idempotency and balanced deposit entries
+* Transaction read/list authorization and pagination
 * Authentication and validation paths
 * Rate limiting and error handling
 
@@ -338,12 +408,14 @@ go vet ./...
 go build ./cmd/...
 cd frontend && npm ci && npm test && npm run build
 docker compose config
+./scripts/broker-failure-suite.sh
 ```
 
 ## Project Structure
 
 ```text
 cmd/
+  clearance-admin/
   transaction-service/
   outbox-publisher/
   risk-service/
@@ -355,6 +427,9 @@ internal/
   httpapi/
   kafkabus/
   ledger/
+  maintenance/
+  metrics/
+  operations/
   outbox/
   postgres/
   redislimiter/
@@ -363,6 +438,13 @@ internal/
 migrations/
   001_init.sql
   002_consumer_reliability.sql
+  003_funding_and_queries.sql
+  004_dlq_replay_retention.sql
+deploy/
+  prometheus/
+  grafana/
+scripts/
+  broker-failure-suite.sh
 ```
 
 ## Known Limits
@@ -373,16 +455,15 @@ Current limitations:
 
 * Risk evaluation uses simple threshold rules
 * Frontend is a lightweight demo console
-* No funding/deposit API yet; successful authorization requires existing ledger balance
-* No transaction query APIs yet
-* No DLQ inspection tooling
-* Metrics are basic Prometheus counters and are disabled by default
-* No Grafana dashboards
+* Deposits are an authenticated operator/demo funding rail, not external settlement
+* Authentication uses static bearer values rather than user/service identities and roles
+* DLQ inspection, replay, outbox recovery, and processed-event pruning are CLI workflows rather than a hosted operator API/UI
+* Retention pruning is guarded and bounded but must be scheduled externally
 * No distributed tracing UI yet
 * No Kubernetes deployment
+* The local broker is a single Redpanda node and is not a high-availability topology
 * Kafka and DLQ delivery are at-least-once; duplicate broker messages remain possible
-* Processed-event records currently have no retention or replay-management tooling
-* PostgreSQL transaction guarantees have integration coverage, but there is no automated real-broker failure suite yet
+* The query API is operationally useful but does not provide customer-scoped authorization
 
 ## Why I Built It
 

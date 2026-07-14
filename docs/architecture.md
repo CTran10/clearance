@@ -9,7 +9,8 @@ observable service boundaries throughout.
 
 Services:
 
-- `transaction-service`: authenticated HTTP API for `POST /transactions`.
+- `transaction-service`: authenticated HTTP APIs for payment creation,
+  transaction reads, operator listing, and demo/operator deposits.
 - `outbox-publisher`: drains PostgreSQL `outbox_events` into Redpanda/Kafka.
 - `risk-service`: consumes `transactions.created` and atomically records each
   input event with a `RiskEvaluated` outbox row.
@@ -18,12 +19,13 @@ Services:
 
 Infrastructure:
 
-- PostgreSQL stores transactions, request idempotency records, processed-event
-  records, outbox rows, and ledger entries.
+- PostgreSQL stores transactions, request and deposit idempotency records,
+  processed-event records, durable DLQ records, operator actions, outbox rows,
+  and ledger entries.
 - Redis backs fixed-window API rate limiting.
 - Redpanda provides Kafka-compatible topics.
-- Every Go service exposes `/healthz`; `/metrics` is available when
-  `METRICS_ENABLED=true`.
+- Every Go service exposes `/healthz`; typed Prometheus `/metrics` is available
+  when `METRICS_ENABLED=true`. A local Prometheus/Grafana profile is provisioned.
 
 ```mermaid
 flowchart LR
@@ -55,7 +57,13 @@ flowchart LR
 - Correlation IDs flow through HTTP responses and Kafka message headers.
 - Structured logs avoid request bodies and bearer values.
 - Optional metrics expose HTTP status counts, Kafka publish results, and outbox
-  outcomes.
+  outcomes, latency histograms, consumer retries/commit failures, runtime
+  metrics, operational backlog, DLQ, retention, and database-pool gauges.
+- Consumer failures persist the exact source bytes and coordinates before Kafka
+  DLQ publication. A trusted CLI provides guarded exact replay and audited
+  outbox recovery.
+- Processed-event retention is bounded, previewable, serialized with an
+  advisory lock, and constrained to exceed the replay window.
 
 Kafka delivery remains at-least-once. The outbox publisher can publish the same
 event again if Kafka accepts it but the database status update fails. Stable
@@ -67,29 +75,26 @@ Kafka exactly-once semantics or duplicate-free topics.
 
 - Active backend code is Go under `cmd/` and `internal/`.
 - Active database setup is numbered SQL under `migrations/`.
-- The active HTTP API is only `POST /transactions`, plus health and optional
-  metrics.
-- The optional frontend console talks to `POST /transactions` on the Go
-  transaction service.
+- The active HTTP APIs are `POST /transactions`, `GET /transactions/{id}`,
+  operator-only `GET /transactions`, and `POST /accounts/{id}/deposits`, plus
+  health and optional metrics.
+- The optional frontend console submits transactions and polls the durable
+  transaction status endpoint until a final state is visible.
+- Destructive recovery remains outside HTTP in the `clearance-admin` trusted
+  operations CLI.
 
-## Feature Ranking
+## Operational Boundaries
 
-1. Observability MVP: opt-in Prometheus-compatible `/metrics` on every Go service.
-   Highest ROI because the architecture already has events, Redis, Kafka, and
-   reliability patterns, but needed a visible operations surface.
-2. Failure-mode demo script: proves outbox retry, DLQ, and recovery under broker
-   outage.
-3. Transaction status read API: makes eventual consistency easy to inspect from
-   a client.
-4. Consumer lag/DLQ dashboard: strong SRE signal once metrics have enough data.
-5. OpenTelemetry traces: valuable after metrics exist, but higher setup cost.
-
-## Built MVP
-
-The first MVP is the observability layer:
-
-- opt-in `GET /metrics` on `transaction-service`.
-- opt-in `GET /metrics` on worker health servers.
-- `clearance_http_requests_total{method,path,status}`.
-- `clearance_kafka_messages_published_total{topic,result}`.
-- `clearance_outbox_events_total{result}`.
+- Deposits are a trusted operator/demo funding rail, not proof of external
+  settlement.
+- Authentication is separated by transaction, funding, and operator bearer
+  values, but remains static-token authentication rather than an identity and
+  role system.
+- The local Redpanda topology is a single broker. The isolated failure suite
+  proves application behavior during outage/recovery, not broker high
+  availability.
+- Kafka delivery remains at-least-once. Database side effects are effectively
+  once only for the same stable event ID and identical bytes.
+- Retention tooling is manual and requires an external scheduler.
+- OpenTelemetry tracing, a tracing UI, Kubernetes, and customer-scoped query
+  authorization remain outside the current implementation.
