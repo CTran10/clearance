@@ -48,6 +48,12 @@ func TestServiceCreatesPendingTransactionAndOutboxEvent(t *testing.T) {
 	if events[0].CorrelationID != metadata.CorrelationID {
 		t.Fatal("outbox event should carry correlation id")
 	}
+	if events[0].AggregateID != response.TransactionID {
+		t.Fatalf("aggregate id = %q, want %q", events[0].AggregateID, response.TransactionID)
+	}
+	if events[0].PartitionKey != request.AccountID {
+		t.Fatalf("partition key = %q, want account id %q", events[0].PartitionKey, request.AccountID)
+	}
 }
 
 func TestServiceReplaysSameIdempotencyKeyAndRejectsPayloadMismatch(t *testing.T) {

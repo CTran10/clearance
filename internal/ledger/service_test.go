@@ -2,99 +2,84 @@ package ledger
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/CTran10/clearance/internal/domain"
 )
 
-func TestServiceCreatesImmutableLedgerEntriesForLowRiskEvaluation(t *testing.T) {
+func TestServiceCreatesImmutableLedgerEntriesAndOutboxOnce(t *testing.T) {
 	t.Parallel()
 
 	store := NewMemoryStore()
 	store.AddPendingTransaction(domain.Transaction{
-		ID:          "txn_123",
-		AccountID:   "acct_123",
-		AmountCents: 12_550,
-		Currency:    "USD",
-		Status:      domain.TransactionPending,
+		ID: "txn_123", AccountID: "acct_123", AmountCents: 12_550, Currency: "USD", Status: domain.TransactionPending,
 	})
 	store.Credit("acct_123", "USD", 20_000)
-	publisher := NewRecordingPublisher()
-	service := NewService(store, publisher.Publish)
+	service := NewService(store)
+	payload := riskPayload(t, domain.RiskEvaluated{
+		TransactionID: "txn_123", AccountID: "acct_123", AmountCents: 12_550, Currency: "USD",
+		RiskLevel: domain.RiskLow, Approved: true, CorrelationID: "trace_123",
+	})
 
-	event := domain.RiskEvaluated{
-		TransactionID: "txn_123",
-		AccountID:     "acct_123",
-		AmountCents:   12_550,
-		Currency:      "USD",
-		RiskLevel:     domain.RiskLow,
-		Approved:      true,
-		CorrelationID: "trace_123",
-	}
-
-	if err := service.HandleRiskEvaluated(context.Background(), event); err != nil {
-		t.Fatalf("HandleRiskEvaluated returned error: %v", err)
+	for range 2 {
+		if err := service.HandleRiskEvaluated(context.Background(), "evt_risk", payload); err != nil {
+			t.Fatalf("HandleRiskEvaluated returned error: %v", err)
+		}
 	}
 
 	entries := store.LedgerEntries()
 	if len(entries) != 2 {
 		t.Fatalf("ledger entry count = %d, want 2", len(entries))
 	}
-	if entries[0].TransactionID != event.TransactionID || entries[1].TransactionID != event.TransactionID {
-		t.Fatal("ledger entries should reference the evaluated transaction")
-	}
 	if entries[0].AmountCents+entries[1].AmountCents != 0 {
 		t.Fatal("ledger entries should balance to zero")
 	}
-	if got := store.TransactionStatus(event.TransactionID); got != domain.TransactionAuthorized {
+	if got := store.TransactionStatus("txn_123"); got != domain.TransactionAuthorized {
 		t.Fatalf("transaction status = %q, want %q", got, domain.TransactionAuthorized)
 	}
-
-	published := publisher.Events()
-	if len(published) != 1 || published[0].Type != domain.EventTransactionAuthorized {
-		t.Fatalf("published events = %#v, want one TransactionAuthorized", published)
+	events := store.OutboxEvents()
+	if len(events) != 1 || events[0].Type != domain.EventTransactionAuthorized {
+		t.Fatalf("outbox events = %#v, want one TransactionAuthorized", events)
 	}
-	if published[0].CorrelationID != event.CorrelationID {
-		t.Fatal("correlation id should be propagated")
+	if events[0].AggregateID != "txn_123" || events[0].PartitionKey != "acct_123" {
+		t.Fatalf("outbox routing = aggregate %q partition %q", events[0].AggregateID, events[0].PartitionKey)
 	}
 }
 
-func TestServiceFailsApprovedEvaluationWhenFundsAreUnavailable(t *testing.T) {
+func TestServiceAtomicallyFailsWhenFundsAreUnavailable(t *testing.T) {
 	t.Parallel()
 
 	store := NewMemoryStore()
 	store.AddPendingTransaction(domain.Transaction{
-		ID:          "txn_empty",
-		AccountID:   "acct_empty",
-		AmountCents: 12_550,
-		Currency:    "USD",
-		Status:      domain.TransactionPending,
+		ID: "txn_empty", AccountID: "acct_empty", AmountCents: 12_550, Currency: "USD", Status: domain.TransactionPending,
 	})
-	publisher := NewRecordingPublisher()
-	service := NewService(store, publisher.Publish)
+	service := NewService(store)
+	payload := riskPayload(t, domain.RiskEvaluated{
+		TransactionID: "txn_empty", AccountID: "acct_empty", AmountCents: 12_550, Currency: "USD",
+		RiskLevel: domain.RiskLow, Approved: true, CorrelationID: "trace_empty",
+	})
 
-	event := domain.RiskEvaluated{
-		TransactionID: "txn_empty",
-		AccountID:     "acct_empty",
-		AmountCents:   12_550,
-		Currency:      "USD",
-		RiskLevel:     domain.RiskLow,
-		Approved:      true,
-		CorrelationID: "trace_empty",
-	}
-
-	if err := service.HandleRiskEvaluated(context.Background(), event); err != nil {
+	if err := service.HandleRiskEvaluated(context.Background(), "evt_empty", payload); err != nil {
 		t.Fatalf("HandleRiskEvaluated returned error: %v", err)
 	}
 	if len(store.LedgerEntries()) != 0 {
 		t.Fatal("insufficient funds should not create ledger entries")
 	}
-	if got := store.TransactionStatus(event.TransactionID); got != domain.TransactionFailed {
+	if got := store.TransactionStatus("txn_empty"); got != domain.TransactionFailed {
 		t.Fatalf("transaction status = %q, want %q", got, domain.TransactionFailed)
 	}
-	published := publisher.Events()
-	if len(published) != 1 || published[0].Type != domain.EventTransactionFailed {
-		t.Fatalf("published events = %#v, want one TransactionFailed", published)
+	events := store.OutboxEvents()
+	if len(events) != 1 || events[0].Type != domain.EventTransactionFailed {
+		t.Fatalf("outbox events = %#v, want one TransactionFailed", events)
+	}
+	var outcome domain.RiskEvaluated
+	if err := json.Unmarshal(events[0].Payload, &outcome); err != nil {
+		t.Fatalf("decode outcome: %v", err)
+	}
+	if outcome.Approved || outcome.Reason != "insufficient funds" {
+		t.Fatalf("outcome = %#v, want insufficient-funds failure", outcome)
 	}
 }
 
@@ -103,146 +88,104 @@ func TestServiceFailsHighRiskEvaluationWithoutLedgerEntries(t *testing.T) {
 
 	store := NewMemoryStore()
 	store.AddPendingTransaction(domain.Transaction{
-		ID:          "txn_high",
-		AccountID:   "acct_123",
-		AmountCents: 90_000,
-		Currency:    "USD",
-		Status:      domain.TransactionPending,
+		ID: "txn_high", AccountID: "acct_123", AmountCents: 90_000, Currency: "USD", Status: domain.TransactionPending,
 	})
-	publisher := NewRecordingPublisher()
-	service := NewService(store, publisher.Publish)
+	service := NewService(store)
+	payload := riskPayload(t, domain.RiskEvaluated{
+		TransactionID: "txn_high", AccountID: "acct_123", AmountCents: 90_000, Currency: "USD",
+		RiskLevel: domain.RiskHigh, Approved: false, Reason: "amount is greater than 500.00", CorrelationID: "trace_high",
+	})
 
-	event := domain.RiskEvaluated{
-		TransactionID: "txn_high",
-		AccountID:     "acct_123",
-		AmountCents:   90_000,
-		Currency:      "USD",
-		RiskLevel:     domain.RiskHigh,
-		Approved:      false,
-		CorrelationID: "trace_high",
-	}
-
-	if err := service.HandleRiskEvaluated(context.Background(), event); err != nil {
+	if err := service.HandleRiskEvaluated(context.Background(), "evt_high", payload); err != nil {
 		t.Fatalf("HandleRiskEvaluated returned error: %v", err)
 	}
-
 	if len(store.LedgerEntries()) != 0 {
 		t.Fatal("high risk transaction should not create ledger entries")
 	}
-	if got := store.TransactionStatus(event.TransactionID); got != domain.TransactionFailed {
+	if got := store.TransactionStatus("txn_high"); got != domain.TransactionFailed {
 		t.Fatalf("transaction status = %q, want %q", got, domain.TransactionFailed)
 	}
-
-	published := publisher.Events()
-	if len(published) != 1 || published[0].Type != domain.EventTransactionFailed {
-		t.Fatalf("published events = %#v, want one TransactionFailed", published)
+	if events := store.OutboxEvents(); len(events) != 1 || events[0].Type != domain.EventTransactionFailed {
+		t.Fatalf("outbox events = %#v, want one TransactionFailed", events)
 	}
 }
 
-func TestServiceRejectsFailedLowRiskEvaluation(t *testing.T) {
+func TestServiceRejectsInvalidRiskCombinationsBeforePersistence(t *testing.T) {
+	t.Parallel()
+
+	tests := []domain.RiskEvaluated{
+		{TransactionID: "txn_1", AccountID: "acct_1", AmountCents: 1, Currency: "USD", RiskLevel: domain.RiskLow, Approved: false},
+		{TransactionID: "txn_1", AccountID: "acct_1", AmountCents: 1, Currency: "USD", RiskLevel: domain.RiskHigh, Approved: true},
+	}
+	for _, event := range tests {
+		store := NewMemoryStore()
+		store.AddPendingTransaction(domain.Transaction{
+			ID: "txn_1", AccountID: "acct_1", AmountCents: 1, Currency: "USD", Status: domain.TransactionPending,
+		})
+		service := NewService(store)
+		if err := service.HandleRiskEvaluated(context.Background(), "evt_invalid", riskPayload(t, event)); err == nil {
+			t.Fatalf("invalid evaluation %#v should fail", event)
+		}
+		if len(store.OutboxEvents()) != 0 {
+			t.Fatal("invalid evaluation should not persist an outbox event")
+		}
+	}
+}
+
+func TestServiceRejectsEventIDReusedWithDifferentPayload(t *testing.T) {
 	t.Parallel()
 
 	store := NewMemoryStore()
 	store.AddPendingTransaction(domain.Transaction{
-		ID:          "txn_low",
-		AccountID:   "acct_123",
-		AmountCents: 12_550,
-		Currency:    "USD",
-		Status:      domain.TransactionPending,
+		ID: "txn_123", AccountID: "acct_123", AmountCents: 12_550, Currency: "USD", Status: domain.TransactionPending,
 	})
-	publisher := NewRecordingPublisher()
-	service := NewService(store, publisher.Publish)
+	store.Credit("acct_123", "USD", 20_000)
+	service := NewService(store)
+	first := riskPayload(t, domain.RiskEvaluated{
+		TransactionID: "txn_123", AccountID: "acct_123", AmountCents: 12_550, Currency: "USD", RiskLevel: domain.RiskLow, Approved: true,
+	})
+	changed := riskPayload(t, domain.RiskEvaluated{
+		TransactionID: "txn_123", AccountID: "acct_123", AmountCents: 12_551, Currency: "USD", RiskLevel: domain.RiskLow, Approved: true,
+	})
 
-	event := domain.RiskEvaluated{
-		TransactionID: "txn_low",
-		AccountID:     "acct_123",
-		AmountCents:   12_550,
-		Currency:      "USD",
-		RiskLevel:     domain.RiskLow,
-		Approved:      false,
-		CorrelationID: "trace_low",
+	if err := service.HandleRiskEvaluated(context.Background(), "evt_risk", first); err != nil {
+		t.Fatalf("first delivery returned error: %v", err)
 	}
-
-	if err := service.HandleRiskEvaluated(context.Background(), event); err == nil {
-		t.Fatal("HandleRiskEvaluated should reject failed LOW risk evaluations")
-	}
-	if got := store.TransactionStatus(event.TransactionID); got != domain.TransactionPending {
-		t.Fatalf("transaction status = %q, want %q", got, domain.TransactionPending)
-	}
-	if len(publisher.Events()) != 0 {
-		t.Fatal("rejected evaluation should not publish a failed event")
+	if err := service.HandleRiskEvaluated(context.Background(), "evt_risk", changed); !errors.Is(err, domain.ErrEventIdentityConflict) {
+		t.Fatalf("changed delivery error = %v, want ErrEventIdentityConflict", err)
 	}
 }
 
-func TestServiceRejectsApprovedHighRiskEvaluation(t *testing.T) {
+func TestServiceRejectsTamperedEvaluation(t *testing.T) {
 	t.Parallel()
 
 	store := NewMemoryStore()
 	store.AddPendingTransaction(domain.Transaction{
-		ID:          "txn_manual",
-		AccountID:   "acct_123",
-		AmountCents: 90_000,
-		Currency:    "USD",
-		Status:      domain.TransactionPending,
+		ID: "txn_tampered", AccountID: "acct_123", AmountCents: 12_550, Currency: "USD", Status: domain.TransactionPending,
 	})
-	publisher := NewRecordingPublisher()
-	service := NewService(store, publisher.Publish)
+	store.Credit("acct_123", "USD", 20_000)
+	service := NewService(store)
+	payload := riskPayload(t, domain.RiskEvaluated{
+		TransactionID: "txn_tampered", AccountID: "acct_attacker", AmountCents: 1, Currency: "USD",
+		RiskLevel: domain.RiskLow, Approved: true,
+	})
 
-	event := domain.RiskEvaluated{
-		TransactionID: "txn_manual",
-		AccountID:     "acct_123",
-		AmountCents:   90_000,
-		Currency:      "USD",
-		RiskLevel:     domain.RiskHigh,
-		Approved:      true,
-		CorrelationID: "trace_manual",
+	if err := service.HandleRiskEvaluated(context.Background(), "evt_tampered", payload); err == nil {
+		t.Fatal("tampered evaluation should fail")
 	}
-
-	if err := service.HandleRiskEvaluated(context.Background(), event); err == nil {
-		t.Fatal("HandleRiskEvaluated should reject approved HIGH risk evaluations")
-	}
-	if got := store.TransactionStatus(event.TransactionID); got != domain.TransactionPending {
+	if got := store.TransactionStatus("txn_tampered"); got != domain.TransactionPending {
 		t.Fatalf("transaction status = %q, want %q", got, domain.TransactionPending)
 	}
-	if len(publisher.Events()) != 0 {
-		t.Fatal("rejected evaluation should not publish an authorization event")
+	if len(store.LedgerEntries()) != 0 || len(store.OutboxEvents()) != 0 {
+		t.Fatal("tampered evaluation should have no database effects")
 	}
 }
 
-func TestServiceRejectsEvaluationThatDoesNotMatchTransaction(t *testing.T) {
-	t.Parallel()
-
-	store := NewMemoryStore()
-	store.AddPendingTransaction(domain.Transaction{
-		ID:          "txn_tampered",
-		AccountID:   "acct_123",
-		AmountCents: 12_550,
-		Currency:    "USD",
-		Status:      domain.TransactionPending,
-	})
-	publisher := NewRecordingPublisher()
-	service := NewService(store, publisher.Publish)
-
-	event := domain.RiskEvaluated{
-		TransactionID: "txn_tampered",
-		AccountID:     "acct_attacker",
-		AmountCents:   1,
-		Currency:      "USD",
-		RiskLevel:     domain.RiskLow,
-		Approved:      true,
-		CorrelationID: "trace_tampered",
+func riskPayload(t *testing.T, event domain.RiskEvaluated) []byte {
+	t.Helper()
+	payload, err := json.Marshal(event)
+	if err != nil {
+		t.Fatalf("marshal risk evaluation: %v", err)
 	}
-
-	if err := service.HandleRiskEvaluated(context.Background(), event); err == nil {
-		t.Fatal("HandleRiskEvaluated should reject events that do not match the transaction")
-	}
-	if got := store.TransactionStatus(event.TransactionID); got != domain.TransactionPending {
-		t.Fatalf("transaction status = %q, want %q", got, domain.TransactionPending)
-	}
-	if len(store.LedgerEntries()) != 0 {
-		t.Fatal("tampered event should not create ledger entries")
-	}
-	if len(publisher.Events()) != 0 {
-		t.Fatal("tampered event should not publish")
-	}
+	return payload
 }

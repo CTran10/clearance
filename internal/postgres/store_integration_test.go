@@ -1,0 +1,231 @@
+//go:build integration
+
+package postgres
+
+import (
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"sort"
+	"testing"
+
+	"github.com/CTran10/clearance/internal/domain"
+)
+
+const (
+	testPayloadHash  = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	otherPayloadHash = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+)
+
+func TestSaveConsumerOutboxIsIdempotentAndAtomic(t *testing.T) {
+	store := openIntegrationStore(t)
+	event := domain.NewOutboxEvent(
+		domain.EventRiskEvaluated,
+		"txn_risk",
+		"acct_risk",
+		"trace_risk",
+		[]byte(`{"transaction_id":"txn_risk"}`),
+	)
+
+	created, err := store.SaveConsumerOutbox(
+		context.Background(), "risk-service", "evt_created", testPayloadHash, event,
+	)
+	if err != nil || !created {
+		t.Fatalf("first SaveConsumerOutbox = %v, %v; want true, nil", created, err)
+	}
+	created, err = store.SaveConsumerOutbox(
+		context.Background(), "risk-service", "evt_created", testPayloadHash, event,
+	)
+	if err != nil || created {
+		t.Fatalf("duplicate SaveConsumerOutbox = %v, %v; want false, nil", created, err)
+	}
+	if _, err := store.SaveConsumerOutbox(
+		context.Background(), "risk-service", "evt_created", otherPayloadHash, event,
+	); !errors.Is(err, domain.ErrEventIdentityConflict) {
+		t.Fatalf("conflicting SaveConsumerOutbox error = %v, want ErrEventIdentityConflict", err)
+	}
+	assertCount(t, store, "processed_events", 1)
+	assertCount(t, store, "outbox_events", 1)
+
+	_, err = store.SaveConsumerOutbox(
+		context.Background(), "risk-service", "evt_rollback", testPayloadHash, event,
+	)
+	if err == nil {
+		t.Fatal("duplicate outbox id should fail")
+	}
+	var processed int
+	if err := store.pool.QueryRow(
+		context.Background(),
+		`select count(*) from processed_events where event_id = 'evt_rollback'`,
+	).Scan(&processed); err != nil {
+		t.Fatalf("count rolled-back processed event: %v", err)
+	}
+	if processed != 0 {
+		t.Fatalf("rolled-back processed event count = %d, want 0", processed)
+	}
+}
+
+func TestProcessRiskEvaluatedProducesOneAtomicLedgerOutcome(t *testing.T) {
+	store := openIntegrationStore(t)
+	seedPendingTransactionAndFunds(t, store, "txn_ledger", "acct_ledger", 20_000)
+	event := domain.RiskEvaluated{
+		TransactionID: "txn_ledger",
+		AccountID:     "acct_ledger",
+		AmountCents:   12_550,
+		Currency:      "USD",
+		RiskLevel:     domain.RiskLow,
+		Approved:      true,
+		CorrelationID: "trace_ledger",
+	}
+
+	for delivery := 1; delivery <= 2; delivery++ {
+		created, err := store.ProcessRiskEvaluated(
+			context.Background(), "evt_risk", testPayloadHash, event,
+		)
+		if err != nil {
+			t.Fatalf("delivery %d returned error: %v", delivery, err)
+		}
+		if created != (delivery == 1) {
+			t.Fatalf("delivery %d created = %v", delivery, created)
+		}
+	}
+
+	var status domain.TransactionStatus
+	if err := store.pool.QueryRow(
+		context.Background(), `select status from transactions where id = 'txn_ledger'`,
+	).Scan(&status); err != nil {
+		t.Fatalf("query transaction status: %v", err)
+	}
+	if status != domain.TransactionAuthorized {
+		t.Fatalf("transaction status = %q, want %q", status, domain.TransactionAuthorized)
+	}
+	var ledgerEntries, outcomeEvents, processedEvents int
+	if err := store.pool.QueryRow(
+		context.Background(), `select count(*) from ledger_entries where transaction_id = 'txn_ledger'`,
+	).Scan(&ledgerEntries); err != nil {
+		t.Fatalf("count ledger entries: %v", err)
+	}
+	if err := store.pool.QueryRow(
+		context.Background(), `select count(*) from outbox_events where aggregate_id = 'txn_ledger'`,
+	).Scan(&outcomeEvents); err != nil {
+		t.Fatalf("count outcome events: %v", err)
+	}
+	if err := store.pool.QueryRow(
+		context.Background(), `select count(*) from processed_events where consumer_name = 'ledger-service' and event_id = 'evt_risk'`,
+	).Scan(&processedEvents); err != nil {
+		t.Fatalf("count processed events: %v", err)
+	}
+	if ledgerEntries != 2 || outcomeEvents != 1 || processedEvents != 1 {
+		t.Fatalf("ledger/outbox/processed counts = %d/%d/%d, want 2/1/1", ledgerEntries, outcomeEvents, processedEvents)
+	}
+}
+
+func TestProcessRiskEvaluatedRollsBackStateWhenOutboxInsertFails(t *testing.T) {
+	store := openIntegrationStore(t)
+	seedPendingTransactionAndFunds(t, store, "txn_rollback", "acct_rollback", 20_000)
+	if _, err := store.pool.Exec(context.Background(), `
+		create function reject_final_outbox() returns trigger language plpgsql as $$
+		begin
+			if new.event_type in ('TransactionAuthorized', 'TransactionFailed') then
+				raise exception 'forced final outbox failure';
+			end if;
+			return new;
+		end;
+		$$;
+		create trigger trg_reject_final_outbox before insert on outbox_events
+		for each row execute function reject_final_outbox();
+	`); err != nil {
+		t.Fatalf("install failure trigger: %v", err)
+	}
+	event := domain.RiskEvaluated{
+		TransactionID: "txn_rollback", AccountID: "acct_rollback", AmountCents: 12_550, Currency: "USD",
+		RiskLevel: domain.RiskLow, Approved: true, CorrelationID: "trace_rollback",
+	}
+
+	if _, err := store.ProcessRiskEvaluated(
+		context.Background(), "evt_rollback", testPayloadHash, event,
+	); err == nil {
+		t.Fatal("forced outbox failure should return an error")
+	}
+
+	var status domain.TransactionStatus
+	var ledgerEntries, processedEvents int
+	if err := store.pool.QueryRow(
+		context.Background(), `select status from transactions where id = 'txn_rollback'`,
+	).Scan(&status); err != nil {
+		t.Fatalf("query transaction status: %v", err)
+	}
+	if err := store.pool.QueryRow(
+		context.Background(), `select count(*) from ledger_entries where transaction_id = 'txn_rollback'`,
+	).Scan(&ledgerEntries); err != nil {
+		t.Fatalf("count ledger entries: %v", err)
+	}
+	if err := store.pool.QueryRow(
+		context.Background(), `select count(*) from processed_events where event_id = 'evt_rollback'`,
+	).Scan(&processedEvents); err != nil {
+		t.Fatalf("count processed events: %v", err)
+	}
+	if status != domain.TransactionPending || ledgerEntries != 0 || processedEvents != 0 {
+		t.Fatalf("status/ledger/processed = %q/%d/%d, want PENDING/0/0", status, ledgerEntries, processedEvents)
+	}
+}
+
+func openIntegrationStore(t *testing.T) *Store {
+	t.Helper()
+	databaseURL := os.Getenv("CLEARANCE_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("CLEARANCE_TEST_DATABASE_URL is not set")
+	}
+	store, err := Open(context.Background(), databaseURL)
+	if err != nil {
+		t.Fatalf("open postgres: %v", err)
+	}
+	t.Cleanup(store.Close)
+	if _, err := store.pool.Exec(context.Background(), `drop schema public cascade; create schema public`); err != nil {
+		t.Fatalf("reset schema: %v", err)
+	}
+	migrations, err := filepath.Glob("../../migrations/*.sql")
+	if err != nil {
+		t.Fatalf("list migrations: %v", err)
+	}
+	sort.Strings(migrations)
+	for _, migration := range migrations {
+		sql, err := os.ReadFile(migration)
+		if err != nil {
+			t.Fatalf("read migration %s: %v", migration, err)
+		}
+		if _, err := store.pool.Exec(context.Background(), string(sql)); err != nil {
+			t.Fatalf("apply migration %s: %v", migration, err)
+		}
+	}
+	return store
+}
+
+func seedPendingTransactionAndFunds(t *testing.T, store *Store, transactionID, accountID string, balance int64) {
+	t.Helper()
+	_, err := store.pool.Exec(context.Background(), `
+		insert into transactions (id, account_id, merchant_id, amount_cents, currency, status, correlation_id)
+		values
+			('txn_funding', $1, 'funding', 1, 'USD', 'AUTHORIZED', 'trace_funding'),
+			($2, $1, 'merchant', 12550, 'USD', 'PENDING', 'trace_pending');
+		insert into ledger_entries (id, transaction_id, account_id, amount_cents, currency)
+		values
+			('le_funding_account', 'txn_funding', $1, $3, 'USD'),
+			('le_funding_clearing', 'txn_funding', 'clearing', -$3, 'USD');
+	`, accountID, transactionID, balance)
+	if err != nil {
+		t.Fatalf("seed transaction and funds: %v", err)
+	}
+}
+
+func assertCount(t *testing.T, store *Store, table string, want int) {
+	t.Helper()
+	var got int
+	if err := store.pool.QueryRow(context.Background(), "select count(*) from "+table).Scan(&got); err != nil {
+		t.Fatalf("count %s: %v", table, err)
+	}
+	if got != want {
+		t.Fatalf("%s count = %d, want %d", table, got, want)
+	}
+}
