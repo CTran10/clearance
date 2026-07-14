@@ -12,6 +12,7 @@ import (
 	"github.com/CTran10/clearance/internal/domain"
 	"github.com/CTran10/clearance/internal/health"
 	"github.com/CTran10/clearance/internal/kafkabus"
+	"github.com/CTran10/clearance/internal/metrics"
 	"github.com/CTran10/clearance/internal/outbox"
 	"github.com/CTran10/clearance/internal/postgres"
 )
@@ -26,6 +27,11 @@ func main() {
 		os.Exit(1)
 	}
 	defer store.Close()
+	metricsEnabled := appenv.Bool("METRICS_ENABLED", false)
+	metrics.Configure("outbox-publisher")
+	if metricsEnabled {
+		metrics.StartSampler(ctx, appenv.DurationSeconds("METRICS_SAMPLE_SECONDS", 15*time.Second), store)
+	}
 
 	broker := kafkabus.NewPublisher(appenv.CSV("KAFKA_BROKERS", []string{"redpanda:9092"}))
 	defer func() {
@@ -47,7 +53,7 @@ func main() {
 	)
 	ticker := time.NewTicker(appenv.DurationSeconds("OUTBOX_POLL_SECONDS", time.Second))
 	defer ticker.Stop()
-	health.Start(ctx, ":"+appenv.String("HEALTH_PORT", "8081"), appenv.Bool("METRICS_ENABLED", false))
+	health.Start(ctx, ":"+appenv.String("HEALTH_PORT", "8081"), metricsEnabled)
 
 	slog.Info("outbox publisher started")
 	for {

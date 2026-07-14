@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/CTran10/clearance/internal/domain"
 	"github.com/CTran10/clearance/internal/funding"
@@ -76,16 +77,13 @@ func (r *Router) ServeHTTP(response http.ResponseWriter, request *http.Request) 
 	}
 
 	recorder := &statusRecorder{ResponseWriter: response}
+	started := time.Now()
 	defer func() {
 		status := recorder.status
 		if status == 0 {
 			status = http.StatusOK
 		}
-		metrics.Inc("clearance_http_requests_total", metrics.Labels{
-			"method": request.Method,
-			"path":   metricPath(request),
-			"status": strconv.Itoa(status),
-		})
+		metrics.ObserveHTTPRequest(request.Method, metricPath(request), strconv.Itoa(status), time.Since(started))
 	}()
 
 	r.serveHTTP(recorder, request)

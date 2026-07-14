@@ -15,6 +15,7 @@ x-service-env: &service-env
   CONSUMER_MAX_ATTEMPTS: ${CONSUMER_MAX_ATTEMPTS:-3}
   CORS_ORIGINS: ${CORS_ORIGINS:-}
   METRICS_ENABLED: ${METRICS_ENABLED:-false}
+  METRICS_SAMPLE_SECONDS: ${METRICS_SAMPLE_SECONDS:-15}
 
 services:
   postgres:
@@ -157,5 +158,37 @@ services:
     ports:
       - "127.0.0.1:${LEDGER_HEALTH_HOST_PORT:-8083}:8083"
 
+  prometheus:
+    image: prom/prometheus:v3.13.0
+    profiles: ["observability"]
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=7d
+    volumes:
+      - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./deploy/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "127.0.0.1:${PROMETHEUS_HOST_PORT:-9090}:9090"
+
+  grafana:
+    image: grafana/grafana:13.1.0
+    profiles: ["observability"]
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+    volumes:
+      - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./deploy/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "127.0.0.1:${GRAFANA_HOST_PORT:-3000}:3000"
+    depends_on:
+      - prometheus
+
 volumes:
   postgres_data:
+  prometheus_data:
+  grafana_data:

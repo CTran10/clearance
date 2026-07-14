@@ -13,6 +13,7 @@ import (
 	"github.com/CTran10/clearance/internal/appenv"
 	"github.com/CTran10/clearance/internal/funding"
 	"github.com/CTran10/clearance/internal/httpapi"
+	"github.com/CTran10/clearance/internal/metrics"
 	"github.com/CTran10/clearance/internal/postgres"
 	"github.com/CTran10/clearance/internal/redislimiter"
 	"github.com/CTran10/clearance/internal/transaction"
@@ -28,6 +29,11 @@ func main() {
 		os.Exit(1)
 	}
 	defer store.Close()
+	metricsEnabled := appenv.Bool("METRICS_ENABLED", false)
+	metrics.Configure("transaction-service")
+	if metricsEnabled {
+		metrics.StartSampler(ctx, appenv.DurationSeconds("METRICS_SAMPLE_SECONDS", 15*time.Second), store)
+	}
 
 	limiter := redislimiter.Open(
 		appenv.String("REDIS_ADDR", "redis:6379"),
@@ -48,7 +54,7 @@ func main() {
 			OperatorAuthValue: appenv.Must("OPERATOR_API_AUTH_VALUE"),
 			AllowedOrigins:    appenv.CSV("CORS_ORIGINS", nil),
 			TrustForwardedFor: appenv.Bool("TRUST_X_FORWARDED_FOR", false),
-			MetricsEnabled:    appenv.Bool("METRICS_ENABLED", false),
+			MetricsEnabled:    metricsEnabled,
 		},
 		httpapi.WithQueryService(transaction.NewQueryService(store)),
 		httpapi.WithFundingService(funding.NewService(store, funding.Config{

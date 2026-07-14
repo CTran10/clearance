@@ -3,6 +3,7 @@ package outbox
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/CTran10/clearance/internal/domain"
 	"github.com/CTran10/clearance/internal/metrics"
@@ -46,6 +47,7 @@ func (p *Publisher) PublishNext(ctx context.Context) (bool, error) {
 	// if kafka's having a moment and publish fails, we DON'T just retry forever — that's how one poison event
 	// jams the whole queue. MarkFailedAttempt bumps a counter and once it hits maxAttempts the event gets
 	// "dead lettered" (parked aside) so the line keeps moving. learned the term "poison message" from this exact problem
+	started := time.Now()
 	if err := p.publish(ctx, event); err != nil {
 		result := "failed_attempt"
 		if event.Attempts+1 >= p.maxAttempts {
@@ -54,7 +56,7 @@ func (p *Publisher) PublishNext(ctx context.Context) (bool, error) {
 		if markErr := p.store.MarkFailedAttempt(ctx, event.ID, p.maxAttempts); markErr != nil {
 			return true, fmt.Errorf("mark failed outbox event: %w", markErr)
 		}
-		metrics.Inc("clearance_outbox_events_total", metrics.Labels{"result": result})
+		metrics.OutboxPublish(result, time.Since(started))
 		// note the %w — wrapping the error keeps the original cause attached so callers can errors.Is/As it later.
 		// took me a bit to stop just doing fmt.Errorf("...%v") and losing the actual error underneath
 		return true, fmt.Errorf("publish outbox event: %w", err)
@@ -63,7 +65,7 @@ func (p *Publisher) PublishNext(ctx context.Context) (bool, error) {
 	if err := p.store.MarkPublished(ctx, event.ID); err != nil {
 		return true, fmt.Errorf("mark published outbox event: %w", err)
 	}
-	metrics.Inc("clearance_outbox_events_total", metrics.Labels{"result": "published"})
+	metrics.OutboxPublish("published", time.Since(started))
 	return true, nil
 }
 

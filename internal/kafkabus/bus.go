@@ -109,10 +109,10 @@ func (w *topicWriters) write(
 
 func (w *topicWriters) writeMessage(ctx context.Context, topic string, message kafka.Message) error {
 	if err := w.writer(topic).WriteMessages(ctx, message); err != nil {
-		metrics.Inc("clearance_kafka_messages_published_total", metrics.Labels{"topic": topic, "result": "error"})
+		metrics.KafkaPublish(topic, "error")
 		return fmt.Errorf("write kafka message: %w", err)
 	}
-	metrics.Inc("clearance_kafka_messages_published_total", metrics.Labels{"topic": topic, "result": "ok"})
+	metrics.KafkaPublish(topic, "ok")
 	return nil
 }
 

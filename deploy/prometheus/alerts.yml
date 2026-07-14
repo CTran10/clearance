@@ -1,0 +1,53 @@
+groups:
+  - name: clearance
+    rules:
+      - alert: ClearanceTargetDown
+        expr: up{job="clearance"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Clearance metrics target is unavailable"
+
+      - alert: ClearanceOpenDeadLetters
+        expr: max by (service) (clearance_dead_letters_open) > 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Clearance has unresolved dead-letter records"
+
+      - alert: ClearanceOutboxBacklogOld
+        expr: max by (service) (clearance_outbox_oldest_pending_age_seconds) > 60
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Clearance has an outbox event pending for over one minute"
+
+      - alert: ClearanceConsumerCommitFailures
+        expr: increase(clearance_consumer_offset_commit_failures_total[5m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "A Clearance consumer failed to commit a Kafka offset"
+
+      - alert: ClearanceHTTPServerErrors
+        expr: sum(rate(clearance_http_requests_total{status=~"5.."}[5m])) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Clearance HTTP 5xx rate is elevated"
+
+      - alert: ClearancePostgresPoolSaturated
+        expr: |
+          max by (service) (clearance_postgres_pool_connections{state="in_use"})
+          /
+          clamp_min(max by (service) (clearance_postgres_pool_connections{state="open"}), 1)
+          > 0.9
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Clearance PostgreSQL pool is over 90% utilized"

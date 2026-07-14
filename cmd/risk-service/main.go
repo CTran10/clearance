@@ -13,6 +13,7 @@ import (
 	"github.com/CTran10/clearance/internal/deadletter"
 	"github.com/CTran10/clearance/internal/health"
 	"github.com/CTran10/clearance/internal/kafkabus"
+	"github.com/CTran10/clearance/internal/metrics"
 	"github.com/CTran10/clearance/internal/postgres"
 	"github.com/CTran10/clearance/internal/risk"
 	"github.com/segmentio/kafka-go"
@@ -28,6 +29,11 @@ func main() {
 		os.Exit(1)
 	}
 	defer store.Close()
+	metricsEnabled := appenv.Bool("METRICS_ENABLED", false)
+	metrics.Configure(risk.ConsumerName)
+	if metricsEnabled {
+		metrics.StartSampler(ctx, appenv.DurationSeconds("METRICS_SAMPLE_SECONDS", 15*time.Second), store)
+	}
 	service := risk.NewService(store)
 
 	brokers := appenv.CSV("KAFKA_BROKERS", []string{"redpanda:9092"})
@@ -41,11 +47,11 @@ func main() {
 	}()
 	maxAttempts := appenv.Int("CONSUMER_MAX_ATTEMPTS", 3)
 	deadLetterer := deadletter.NewRecorder(risk.ConsumerName, store, publisher)
-	health.Start(ctx, ":"+appenv.String("HEALTH_PORT", "8082"), appenv.Bool("METRICS_ENABLED", false))
+	health.Start(ctx, ":"+appenv.String("HEALTH_PORT", "8082"), metricsEnabled)
 
 	slog.Info("risk service started")
 	consumer.RunLoop(ctx, reader, deadLetterer, consumer.Config{
-		Name:           "risk service",
+		Name:           risk.ConsumerName,
 		MaxAttempts:    maxAttempts,
 		RetryBaseDelay: 100 * time.Millisecond,
 	}, func(ctx context.Context, message kafka.Message) error {

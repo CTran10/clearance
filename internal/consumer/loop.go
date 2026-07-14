@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/CTran10/clearance/internal/metrics"
 	"github.com/segmentio/kafka-go"
 )
 
@@ -44,31 +45,42 @@ func RunLoop(ctx context.Context, reader Reader, deadLetterer DeadLetterer, conf
 			slog.Warn(config.Name+" fetch failed", "err", err)
 			continue
 		}
+		started := time.Now()
 		err = retry(ctx, config.MaxAttempts, config.RetryBaseDelay, func() error {
 			return handle(ctx, message)
+		}, func() {
+			metrics.IncConsumerRetry(config.Name, message.Topic)
 		})
+		result := "processed"
 		if err != nil {
 			if dlqErr := deadLetterer.Move(ctx, message, err); dlqErr != nil {
 				slog.Warn(config.Name+" dead letter publish failed", "err", dlqErr)
+				metrics.ObserveConsumerMessage(config.Name, message.Topic, "dlq_error", time.Since(started))
 				// couldn't even DLQ it → do NOT commit. leave it on the topic so we try again. losing it is worse than retrying it
 				continue
 			}
+			result = "dlq"
 			slog.Warn(config.Name+" moved message to dead letter", "err", err)
 		}
 		// commit (= "i'm done with this message, don't redeliver it") happens AFTER we either handled it or DLQ'd it.
 		// this is "at-least-once": if we crash before committing, kafka replays the message — which is exactly why every
 		// handler downstream has to be idempotent. commit too early and a crash means the message is just gone forever
 		if err := reader.CommitMessages(ctx, message); err != nil {
+			metrics.IncOffsetCommitFailure(config.Name, message.Topic)
 			slog.Warn(config.Name+" commit failed", "err", err)
 		}
+		metrics.ObserveConsumerMessage(config.Name, message.Topic, result, time.Since(started))
 	}
 }
 
-func retry(ctx context.Context, maxAttempts int, baseDelay time.Duration, fn func() error) error {
+func retry(ctx context.Context, maxAttempts int, baseDelay time.Duration, fn func() error, onRetry func()) error {
 	var err error
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		if err = fn(); err == nil {
 			return nil
+		}
+		if attempt < maxAttempts && onRetry != nil {
+			onRetry()
 		}
 		delay := time.Duration(attempt) * baseDelay // backoff grows each attempt so we don't hammer a struggling downstream
 		if delay <= 0 {
