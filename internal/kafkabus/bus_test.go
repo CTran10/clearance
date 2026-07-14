@@ -107,6 +107,7 @@ func TestTopicForMapsEveryBusinessEvent(t *testing.T) {
 		domain.EventRiskEvaluated:         TopicRiskEvaluated,
 		domain.EventTransactionAuthorized: TopicTransactionAuthorized,
 		domain.EventTransactionFailed:     TopicTransactionFailed,
+		domain.EventFundsDeposited:        TopicFundsDeposited,
 		"Unknown":                         TopicDeadLetter,
 	}
 	for eventType, want := range tests {
