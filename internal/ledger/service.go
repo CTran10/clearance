@@ -7,13 +7,16 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/CTran10/clearance/internal/consumer"
 	"github.com/CTran10/clearance/internal/domain"
 )
+
+const ConsumerName = "ledger-service"
 
 type Store interface {
 	ProcessRiskEvaluated(
 		ctx context.Context,
-		eventID string,
+		delivery consumer.Delivery,
 		payloadHash string,
 		event domain.RiskEvaluated,
 	) (bool, error)
@@ -27,7 +30,7 @@ func NewService(store Store) *Service {
 	return &Service{store: store}
 }
 
-func (s *Service) HandleRiskEvaluated(ctx context.Context, eventID string, payload []byte) error {
+func (s *Service) HandleRiskEvaluated(ctx context.Context, delivery consumer.Delivery, payload []byte) error {
 	var event domain.RiskEvaluated
 	if err := json.Unmarshal(payload, &event); err != nil {
 		return fmt.Errorf("decode risk evaluated event: %w", err)
@@ -43,7 +46,7 @@ func (s *Service) HandleRiskEvaluated(ctx context.Context, eventID string, paylo
 	}
 
 	sum := sha256.Sum256(payload)
-	if _, err := s.store.ProcessRiskEvaluated(ctx, eventID, hex.EncodeToString(sum[:]), event); err != nil {
+	if _, err := s.store.ProcessRiskEvaluated(ctx, delivery, hex.EncodeToString(sum[:]), event); err != nil {
 		return fmt.Errorf("process risk evaluation: %w", err)
 	}
 	return nil

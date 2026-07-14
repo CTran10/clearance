@@ -104,6 +104,7 @@ type OutboxEvent struct {
 	Payload       []byte       `json:"payload"`
 	Status        OutboxStatus `json:"status"`
 	Attempts      int          `json:"attempts"`
+	LastError     string       `json:"last_error,omitempty"`
 	CreatedAt     time.Time    `json:"created_at"`
 }
 

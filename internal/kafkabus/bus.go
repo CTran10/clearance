@@ -46,6 +46,10 @@ func (p *Publisher) Move(ctx context.Context, message kafka.Message) error {
 	return moveToDeadLetter(ctx, message, p.writers.writeMessage)
 }
 
+func (p *Publisher) PublishMessage(ctx context.Context, topic string, message kafka.Message) error {
+	return p.writers.writeMessage(ctx, topic, message)
+}
+
 func (p *Publisher) Close() error {
 	return p.writers.Close()
 }

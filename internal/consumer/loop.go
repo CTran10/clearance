@@ -14,7 +14,15 @@ type Reader interface {
 }
 
 type DeadLetterer interface {
-	Move(ctx context.Context, message kafka.Message) error
+	Move(ctx context.Context, message kafka.Message, cause error) error
+}
+
+type Delivery struct {
+	ConsumerName    string
+	EventID         string
+	SourceTopic     string
+	SourcePartition int
+	SourceOffset    int64
 }
 
 type Config struct {
@@ -40,7 +48,7 @@ func RunLoop(ctx context.Context, reader Reader, deadLetterer DeadLetterer, conf
 			return handle(ctx, message)
 		})
 		if err != nil {
-			if dlqErr := deadLetterer.Move(ctx, message); dlqErr != nil {
+			if dlqErr := deadLetterer.Move(ctx, message, err); dlqErr != nil {
 				slog.Warn(config.Name+" dead letter publish failed", "err", dlqErr)
 				// couldn't even DLQ it → do NOT commit. leave it on the topic so we try again. losing it is worse than retrying it
 				continue

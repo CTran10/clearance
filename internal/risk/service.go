@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/CTran10/clearance/internal/consumer"
 	"github.com/CTran10/clearance/internal/domain"
 )
 
@@ -15,8 +16,7 @@ const ConsumerName = "risk-service"
 type Store interface {
 	SaveConsumerOutbox(
 		ctx context.Context,
-		consumerName string,
-		eventID string,
+		delivery consumer.Delivery,
 		payloadHash string,
 		event domain.OutboxEvent,
 	) (bool, error)
@@ -30,7 +30,7 @@ func NewService(store Store) *Service {
 	return &Service{store: store}
 }
 
-func (s *Service) HandleTransactionCreated(ctx context.Context, eventID string, payload []byte) error {
+func (s *Service) HandleTransactionCreated(ctx context.Context, delivery consumer.Delivery, payload []byte) error {
 	var transaction domain.Transaction
 	if err := json.Unmarshal(payload, &transaction); err != nil {
 		return fmt.Errorf("decode transaction created event: %w", err)
@@ -63,8 +63,7 @@ func (s *Service) HandleTransactionCreated(ctx context.Context, eventID string, 
 	)
 	if _, err := s.store.SaveConsumerOutbox(
 		ctx,
-		ConsumerName,
-		eventID,
+		delivery,
 		hashPayload(payload),
 		outboxEvent,
 	); err != nil {

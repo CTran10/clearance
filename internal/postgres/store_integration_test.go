@@ -10,6 +10,7 @@ import (
 	"sort"
 	"testing"
 
+	"github.com/CTran10/clearance/internal/consumer"
 	"github.com/CTran10/clearance/internal/domain"
 )
 
@@ -29,19 +30,19 @@ func TestSaveConsumerOutboxIsIdempotentAndAtomic(t *testing.T) {
 	)
 
 	created, err := store.SaveConsumerOutbox(
-		context.Background(), "risk-service", "evt_created", testPayloadHash, event,
+		context.Background(), integrationDelivery("risk-service", "evt_created"), testPayloadHash, event,
 	)
 	if err != nil || !created {
 		t.Fatalf("first SaveConsumerOutbox = %v, %v; want true, nil", created, err)
 	}
 	created, err = store.SaveConsumerOutbox(
-		context.Background(), "risk-service", "evt_created", testPayloadHash, event,
+		context.Background(), integrationDelivery("risk-service", "evt_created"), testPayloadHash, event,
 	)
 	if err != nil || created {
 		t.Fatalf("duplicate SaveConsumerOutbox = %v, %v; want false, nil", created, err)
 	}
 	if _, err := store.SaveConsumerOutbox(
-		context.Background(), "risk-service", "evt_created", otherPayloadHash, event,
+		context.Background(), integrationDelivery("risk-service", "evt_created"), otherPayloadHash, event,
 	); !errors.Is(err, domain.ErrEventIdentityConflict) {
 		t.Fatalf("conflicting SaveConsumerOutbox error = %v, want ErrEventIdentityConflict", err)
 	}
@@ -56,7 +57,7 @@ func TestSaveConsumerOutboxIsIdempotentAndAtomic(t *testing.T) {
 	}
 
 	_, err = store.SaveConsumerOutbox(
-		context.Background(), "risk-service", "evt_rollback", testPayloadHash, event,
+		context.Background(), integrationDelivery("risk-service", "evt_rollback"), testPayloadHash, event,
 	)
 	if err == nil {
 		t.Fatal("duplicate outbox id should fail")
@@ -88,7 +89,7 @@ func TestProcessRiskEvaluatedProducesOneAtomicLedgerOutcome(t *testing.T) {
 
 	for delivery := 1; delivery <= 2; delivery++ {
 		created, err := store.ProcessRiskEvaluated(
-			context.Background(), "evt_risk", testPayloadHash, event,
+			context.Background(), integrationDelivery("ledger-service", "evt_risk"), testPayloadHash, event,
 		)
 		if err != nil {
 			t.Fatalf("delivery %d returned error: %v", delivery, err)
@@ -151,7 +152,7 @@ func TestProcessRiskEvaluatedRollsBackStateWhenOutboxInsertFails(t *testing.T) {
 	}
 
 	if _, err := store.ProcessRiskEvaluated(
-		context.Background(), "evt_rollback", testPayloadHash, event,
+		context.Background(), integrationDelivery("ledger-service", "evt_rollback"), testPayloadHash, event,
 	); err == nil {
 		t.Fatal("forced outbox failure should return an error")
 	}
@@ -241,5 +242,16 @@ func assertCount(t *testing.T, store *Store, table string, want int) {
 	}
 	if got != want {
 		t.Fatalf("%s count = %d, want %d", table, got, want)
+	}
+}
+
+func integrationDelivery(consumerName, eventID string) consumer.Delivery {
+	topic := "transactions.created"
+	if consumerName == "ledger-service" {
+		topic = "risk.evaluated"
+	}
+	return consumer.Delivery{
+		ConsumerName: consumerName, EventID: eventID, SourceTopic: topic,
+		SourcePartition: 0, SourceOffset: 1,
 	}
 }

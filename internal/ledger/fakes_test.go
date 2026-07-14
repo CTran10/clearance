@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/CTran10/clearance/internal/consumer"
 	"github.com/CTran10/clearance/internal/domain"
 )
 
@@ -42,14 +43,14 @@ func (s *MemoryStore) Credit(accountID string, currency string, amountCents int6
 
 func (s *MemoryStore) ProcessRiskEvaluated(
 	_ context.Context,
-	eventID string,
+	delivery consumer.Delivery,
 	payloadHash string,
 	event domain.RiskEvaluated,
 ) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if existing, ok := s.processed[eventID]; ok {
+	if existing, ok := s.processed[delivery.EventID]; ok {
 		if existing != payloadHash {
 			return false, domain.ErrEventIdentityConflict
 		}
@@ -94,7 +95,7 @@ func (s *MemoryStore) ProcessRiskEvaluated(
 		return false, err
 	}
 	s.transactions[transaction.ID] = transaction
-	s.processed[eventID] = payloadHash
+	s.processed[delivery.EventID] = payloadHash
 	s.outbox = append(s.outbox, domain.NewOutboxEvent(
 		eventType, transaction.ID, transaction.AccountID, event.CorrelationID, payload,
 	))
@@ -121,4 +122,11 @@ func (s *MemoryStore) TransactionStatus(transactionID string) domain.Transaction
 
 func balanceKey(accountID string, currency string) string {
 	return accountID + "\x00" + currency
+}
+
+func ledgerDelivery(eventID string) consumer.Delivery {
+	return consumer.Delivery{
+		ConsumerName: "ledger-service", EventID: eventID, SourceTopic: "risk.evaluated",
+		SourcePartition: 0, SourceOffset: 1,
+	}
 }

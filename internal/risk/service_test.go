@@ -7,6 +7,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/CTran10/clearance/internal/consumer"
 	"github.com/CTran10/clearance/internal/domain"
 )
 
@@ -24,7 +25,7 @@ func TestServicePersistsOneRiskOutboxEventForDuplicateDelivery(t *testing.T) {
 	})
 
 	for range 2 {
-		if err := service.HandleTransactionCreated(context.Background(), "evt_created", payload); err != nil {
+		if err := service.HandleTransactionCreated(context.Background(), riskDelivery("evt_created"), payload); err != nil {
 			t.Fatalf("HandleTransactionCreated returned error: %v", err)
 		}
 	}
@@ -61,10 +62,10 @@ func TestServiceRejectsEventIDReusedWithDifferentPayload(t *testing.T) {
 		ID: "txn_123", AccountID: "acct_123", AmountCents: 12_551, Currency: "USD", CorrelationID: "trace_123",
 	})
 
-	if err := service.HandleTransactionCreated(context.Background(), "evt_created", first); err != nil {
+	if err := service.HandleTransactionCreated(context.Background(), riskDelivery("evt_created"), first); err != nil {
 		t.Fatalf("first delivery returned error: %v", err)
 	}
-	if err := service.HandleTransactionCreated(context.Background(), "evt_created", changed); !errors.Is(err, domain.ErrEventIdentityConflict) {
+	if err := service.HandleTransactionCreated(context.Background(), riskDelivery("evt_created"), changed); !errors.Is(err, domain.ErrEventIdentityConflict) {
 		t.Fatalf("changed delivery error = %v, want ErrEventIdentityConflict", err)
 	}
 	if got := len(store.eventsSnapshot()); got != 1 {
@@ -78,7 +79,7 @@ func TestServiceDoesNotPersistMalformedPayload(t *testing.T) {
 	store := newMemoryStore()
 	service := NewService(store)
 
-	if err := service.HandleTransactionCreated(context.Background(), "evt_bad", []byte(`{"id":`)); err == nil {
+	if err := service.HandleTransactionCreated(context.Background(), riskDelivery("evt_bad"), []byte(`{"id":`)); err == nil {
 		t.Fatal("malformed payload should return an error")
 	}
 	if got := len(store.eventsSnapshot()); got != 0 {
@@ -95,6 +96,13 @@ func transactionPayload(t *testing.T, transaction domain.Transaction) []byte {
 	return payload
 }
 
+func riskDelivery(eventID string) consumer.Delivery {
+	return consumer.Delivery{
+		ConsumerName: ConsumerName, EventID: eventID, SourceTopic: "transactions.created",
+		SourcePartition: 0, SourceOffset: 1,
+	}
+}
+
 type memoryStore struct {
 	mu        sync.Mutex
 	processed map[string]string
@@ -107,21 +115,20 @@ func newMemoryStore() *memoryStore {
 
 func (s *memoryStore) SaveConsumerOutbox(
 	_ context.Context,
-	_ string,
-	eventID string,
+	delivery consumer.Delivery,
 	payloadHash string,
 	event domain.OutboxEvent,
 ) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if existing, ok := s.processed[eventID]; ok {
+	if existing, ok := s.processed[delivery.EventID]; ok {
 		if existing != payloadHash {
 			return false, domain.ErrEventIdentityConflict
 		}
 		return false, nil
 	}
-	s.processed[eventID] = payloadHash
+	s.processed[delivery.EventID] = payloadHash
 	s.events = append(s.events, event)
 	return true, nil
 }

@@ -6,16 +6,14 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/CTran10/clearance/internal/consumer"
 	"github.com/CTran10/clearance/internal/domain"
 	"github.com/jackc/pgx/v5"
 )
 
-const ledgerConsumerName = "ledger-service"
-
 func (s *Store) SaveConsumerOutbox(
 	ctx context.Context,
-	consumerName string,
-	eventID string,
+	delivery consumer.Delivery,
 	payloadHash string,
 	event domain.OutboxEvent,
 ) (bool, error) {
@@ -27,7 +25,7 @@ func (s *Store) SaveConsumerOutbox(
 		_ = dbtx.Rollback(ctx)
 	}()
 
-	claimed, err := claimProcessedEvent(ctx, dbtx, consumerName, eventID, payloadHash)
+	claimed, err := claimProcessedEvent(ctx, dbtx, delivery, payloadHash)
 	if err != nil {
 		return false, err
 	}
@@ -45,7 +43,7 @@ func (s *Store) SaveConsumerOutbox(
 
 func (s *Store) ProcessRiskEvaluated(
 	ctx context.Context,
-	eventID string,
+	delivery consumer.Delivery,
 	payloadHash string,
 	event domain.RiskEvaluated,
 ) (bool, error) {
@@ -57,7 +55,7 @@ func (s *Store) ProcessRiskEvaluated(
 		_ = dbtx.Rollback(ctx)
 	}()
 
-	claimed, err := claimProcessedEvent(ctx, dbtx, ledgerConsumerName, eventID, payloadHash)
+	claimed, err := claimProcessedEvent(ctx, dbtx, delivery, payloadHash)
 	if err != nil {
 		return false, err
 	}
@@ -131,24 +129,37 @@ func (s *Store) ProcessRiskEvaluated(
 func claimProcessedEvent(
 	ctx context.Context,
 	dbtx pgx.Tx,
-	consumerName string,
-	eventID string,
+	delivery consumer.Delivery,
 	payloadHash string,
 ) (bool, error) {
 	tag, err := dbtx.Exec(
 		ctx,
-		`insert into processed_events (consumer_name, event_id, payload_sha256)
-		 values ($1, $2, $3)
+		`insert into processed_events
+			(consumer_name, event_id, payload_sha256, source_topic, source_partition, source_offset, last_seen_at)
+		 values ($1, $2, $3, nullif($4, ''), $5, $6, now())
 		 on conflict (consumer_name, event_id) do nothing`,
-		consumerName,
-		eventID,
+		delivery.ConsumerName,
+		delivery.EventID,
 		payloadHash,
+		delivery.SourceTopic,
+		delivery.SourcePartition,
+		delivery.SourceOffset,
 	)
 	if err != nil {
 		return false, fmt.Errorf("claim processed event: %w", err)
 	}
 	if tag.RowsAffected() == 1 {
 		return true, nil
+	}
+	if _, err := dbtx.Exec(
+		ctx,
+		`update processed_events
+		    set last_seen_at = now()
+		  where consumer_name = $1 and event_id = $2`,
+		delivery.ConsumerName,
+		delivery.EventID,
+	); err != nil {
+		return false, fmt.Errorf("refresh processed event: %w", err)
 	}
 
 	var existingHash string
@@ -157,8 +168,8 @@ func claimProcessedEvent(
 		`select payload_sha256
 		   from processed_events
 		  where consumer_name = $1 and event_id = $2`,
-		consumerName,
-		eventID,
+		delivery.ConsumerName,
+		delivery.EventID,
 	).Scan(&existingHash); err != nil {
 		return false, fmt.Errorf("load processed event: %w", err)
 	}

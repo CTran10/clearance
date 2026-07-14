@@ -24,7 +24,7 @@ func TestServiceCreatesImmutableLedgerEntriesAndOutboxOnce(t *testing.T) {
 	})
 
 	for range 2 {
-		if err := service.HandleRiskEvaluated(context.Background(), "evt_risk", payload); err != nil {
+		if err := service.HandleRiskEvaluated(context.Background(), ledgerDelivery("evt_risk"), payload); err != nil {
 			t.Fatalf("HandleRiskEvaluated returned error: %v", err)
 		}
 	}
@@ -61,7 +61,7 @@ func TestServiceAtomicallyFailsWhenFundsAreUnavailable(t *testing.T) {
 		RiskLevel: domain.RiskLow, Approved: true, CorrelationID: "trace_empty",
 	})
 
-	if err := service.HandleRiskEvaluated(context.Background(), "evt_empty", payload); err != nil {
+	if err := service.HandleRiskEvaluated(context.Background(), ledgerDelivery("evt_empty"), payload); err != nil {
 		t.Fatalf("HandleRiskEvaluated returned error: %v", err)
 	}
 	if len(store.LedgerEntries()) != 0 {
@@ -96,7 +96,7 @@ func TestServiceFailsHighRiskEvaluationWithoutLedgerEntries(t *testing.T) {
 		RiskLevel: domain.RiskHigh, Approved: false, Reason: "amount is greater than 500.00", CorrelationID: "trace_high",
 	})
 
-	if err := service.HandleRiskEvaluated(context.Background(), "evt_high", payload); err != nil {
+	if err := service.HandleRiskEvaluated(context.Background(), ledgerDelivery("evt_high"), payload); err != nil {
 		t.Fatalf("HandleRiskEvaluated returned error: %v", err)
 	}
 	if len(store.LedgerEntries()) != 0 {
@@ -123,7 +123,7 @@ func TestServiceRejectsInvalidRiskCombinationsBeforePersistence(t *testing.T) {
 			ID: "txn_1", AccountID: "acct_1", AmountCents: 1, Currency: "USD", Status: domain.TransactionPending,
 		})
 		service := NewService(store)
-		if err := service.HandleRiskEvaluated(context.Background(), "evt_invalid", riskPayload(t, event)); err == nil {
+		if err := service.HandleRiskEvaluated(context.Background(), ledgerDelivery("evt_invalid"), riskPayload(t, event)); err == nil {
 			t.Fatalf("invalid evaluation %#v should fail", event)
 		}
 		if len(store.OutboxEvents()) != 0 {
@@ -148,10 +148,10 @@ func TestServiceRejectsEventIDReusedWithDifferentPayload(t *testing.T) {
 		TransactionID: "txn_123", AccountID: "acct_123", AmountCents: 12_551, Currency: "USD", RiskLevel: domain.RiskLow, Approved: true,
 	})
 
-	if err := service.HandleRiskEvaluated(context.Background(), "evt_risk", first); err != nil {
+	if err := service.HandleRiskEvaluated(context.Background(), ledgerDelivery("evt_risk"), first); err != nil {
 		t.Fatalf("first delivery returned error: %v", err)
 	}
-	if err := service.HandleRiskEvaluated(context.Background(), "evt_risk", changed); !errors.Is(err, domain.ErrEventIdentityConflict) {
+	if err := service.HandleRiskEvaluated(context.Background(), ledgerDelivery("evt_risk"), changed); !errors.Is(err, domain.ErrEventIdentityConflict) {
 		t.Fatalf("changed delivery error = %v, want ErrEventIdentityConflict", err)
 	}
 }
@@ -170,7 +170,7 @@ func TestServiceRejectsTamperedEvaluation(t *testing.T) {
 		RiskLevel: domain.RiskLow, Approved: true,
 	})
 
-	if err := service.HandleRiskEvaluated(context.Background(), "evt_tampered", payload); err == nil {
+	if err := service.HandleRiskEvaluated(context.Background(), ledgerDelivery("evt_tampered"), payload); err == nil {
 		t.Fatal("tampered evaluation should fail")
 	}
 	if got := store.TransactionStatus("txn_tampered"); got != domain.TransactionPending {

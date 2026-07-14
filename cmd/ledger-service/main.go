@@ -10,6 +10,7 @@ import (
 
 	"github.com/CTran10/clearance/internal/appenv"
 	"github.com/CTran10/clearance/internal/consumer"
+	"github.com/CTran10/clearance/internal/deadletter"
 	"github.com/CTran10/clearance/internal/health"
 	"github.com/CTran10/clearance/internal/kafkabus"
 	"github.com/CTran10/clearance/internal/ledger"
@@ -39,10 +40,11 @@ func main() {
 	}()
 	service := ledger.NewService(store)
 	maxAttempts := appenv.Int("CONSUMER_MAX_ATTEMPTS", 3)
+	deadLetterer := deadletter.NewRecorder(ledger.ConsumerName, store, publisher)
 	health.Start(ctx, ":"+appenv.String("HEALTH_PORT", "8083"), appenv.Bool("METRICS_ENABLED", false))
 
 	slog.Info("ledger service started")
-	consumer.RunLoop(ctx, reader, publisher, consumer.Config{
+	consumer.RunLoop(ctx, reader, deadLetterer, consumer.Config{
 		Name:           "ledger service",
 		MaxAttempts:    maxAttempts,
 		RetryBaseDelay: 100 * time.Millisecond,
@@ -51,6 +53,9 @@ func main() {
 		if err != nil {
 			return err
 		}
-		return service.HandleRiskEvaluated(ctx, eventID, message.Value)
+		return service.HandleRiskEvaluated(ctx, consumer.Delivery{
+			ConsumerName: ledger.ConsumerName, EventID: eventID, SourceTopic: message.Topic,
+			SourcePartition: message.Partition, SourceOffset: message.Offset,
+		}, message.Value)
 	})
 }
