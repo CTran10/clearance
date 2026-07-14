@@ -84,3 +84,13 @@ jobs:
           FUNDING_API_AUTH_VALUE: ci-funding-placeholder
           OPERATOR_API_AUTH_VALUE: ci-operator-placeholder
         run: docker compose config --quiet
+
+  broker-failure-suite:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run real-broker failure suite
+        run: ./scripts/broker-failure-suite.sh
