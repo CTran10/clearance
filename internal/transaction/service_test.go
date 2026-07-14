@@ -161,6 +161,16 @@ func TestServiceValidatesTrustedInput(t *testing.T) {
 			},
 			metadata: RequestMetadata{IdempotencyKey: "idem_123", CorrelationID: "trace_123"},
 		},
+		{
+			name: "reserved settlement account",
+			request: CreateRequest{
+				AccountID:   "external-settlement",
+				MerchantID:  "merchant_123",
+				AmountCents: 100,
+				Currency:    "USD",
+			},
+			metadata: RequestMetadata{IdempotencyKey: "idem_123", CorrelationID: "trace_123"},
+		},
 	}
 
 	for _, tt := range tests {

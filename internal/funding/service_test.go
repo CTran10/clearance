@@ -89,12 +89,54 @@ func TestServiceRejectsInvalidAndConflictingDeposits(t *testing.T) {
 	}
 }
 
+func TestServiceReturnsConcurrentDepositWinnerAfterExternalReferenceConflict(t *testing.T) {
+	t.Parallel()
+
+	request := DepositRequest{
+		AccountID: "acct_123", AmountCents: 5_000, Currency: "USD",
+		FundingSource: "demo-operator", ExternalReference: "transfer-123",
+	}
+	metadata := RequestMetadata{IdempotencyKey: "fund-123", CorrelationID: "trace-123", OperatorReason: "demo funds"}
+	existing := DepositResponse{
+		DepositID: "dep_existing", TransactionID: "dep_existing", Status: domain.TransactionAuthorized,
+		AccountID: "acct_123", AmountCents: 5_000, Currency: "USD", CorrelationID: "trace-123",
+	}
+	store := &concurrentExternalReferenceStore{
+		record: IdempotencyRecord{RequestHash: hashRequest(request), Response: existing},
+	}
+
+	result, err := NewService(store, Config{}).Deposit(context.Background(), request, metadata)
+	if err != nil {
+		t.Fatalf("Deposit returned error: %v", err)
+	}
+	if result.DepositID != existing.DepositID {
+		t.Fatalf("deposit id = %q, want concurrent winner %q", result.DepositID, existing.DepositID)
+	}
+}
+
 type memoryStore struct {
 	records   map[string]IdempotencyRecord
 	deposit   Deposit
 	event     domain.OutboxEvent
 	creates   int
 	createErr error
+}
+
+type concurrentExternalReferenceStore struct {
+	record  IdempotencyRecord
+	lookups int
+}
+
+func (s *concurrentExternalReferenceStore) FindDepositIdempotency(context.Context, string) (IdempotencyRecord, bool, error) {
+	s.lookups++
+	if s.lookups == 1 {
+		return IdempotencyRecord{}, false, nil
+	}
+	return s.record, true, nil
+}
+
+func (s *concurrentExternalReferenceStore) CreateDeposit(context.Context, Deposit, domain.OutboxEvent) (DepositResponse, error) {
+	return DepositResponse{}, ErrExternalReferenceConflict
 }
 
 func newMemoryStore() *memoryStore {

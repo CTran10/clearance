@@ -75,6 +75,36 @@ func TestDeadLetterReplayAndProcessedRetentionAreDurable(t *testing.T) {
 	}
 }
 
+func TestDeadLetterAllowsOnlyOnePendingReplayAttempt(t *testing.T) {
+	store := openIntegrationStore(t)
+	now := time.Now().UTC()
+	record, err := store.UpsertDeadLetter(context.Background(), deadletter.Record{
+		ID: "dlq_pending", ConsumerName: "risk-service", EventID: "evt_pending",
+		SourceTopic: "transactions.created", SourcePartition: 0, SourceOffset: 7,
+		Key: []byte("acct_123"), Headers: []kafka.Header{}, Payload: []byte(`{"bad":true}`),
+		PayloadSHA256: testPayloadHash, ErrorClass: "handler_error", ErrorMessage: "dependency unavailable",
+		State: deadletter.StateOpen, FirstFailedAt: now, LastFailedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("seed dead letter: %v", err)
+	}
+	firstAttempt, err := store.StartDeadLetterReplay(context.Background(), record.ID, "first operator")
+	if err != nil {
+		t.Fatalf("start first replay: %v", err)
+	}
+	if _, err := store.StartDeadLetterReplay(context.Background(), record.ID, "second operator"); !errors.Is(err, operations.ErrInvalidState) {
+		t.Fatalf("second replay error = %v, want ErrInvalidState", err)
+	}
+	if err := store.FinishDeadLetterReplay(
+		context.Background(), firstAttempt, record.ID, operations.ReplayFailed, "broker unavailable",
+	); err != nil {
+		t.Fatalf("finish failed replay: %v", err)
+	}
+	if _, err := store.StartDeadLetterReplay(context.Background(), record.ID, "retry after failure"); err != nil {
+		t.Fatalf("start replay after failed attempt: %v", err)
+	}
+}
+
 type integrationDLQPublisher struct {
 	deadLetterID string
 }

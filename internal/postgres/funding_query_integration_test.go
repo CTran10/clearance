@@ -4,6 +4,7 @@ package postgres
 
 import (
 	"context"
+	"os"
 	"testing"
 
 	"github.com/CTran10/clearance/internal/domain"
@@ -59,5 +60,49 @@ func TestCreateDepositIsBalancedIdempotentAndQueryable(t *testing.T) {
 	page, err := queries.List(context.Background(), transaction.ListFilter{AccountID: "acct_funded", Limit: 25})
 	if err != nil || len(page.Items) != 1 {
 		t.Fatalf("List deposits = %#v, %v", page, err)
+	}
+}
+
+func TestFundingMigrationPreservesLegacyReservedAccountRows(t *testing.T) {
+	databaseURL := os.Getenv("CLEARANCE_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("CLEARANCE_TEST_DATABASE_URL is not set")
+	}
+	store, err := Open(context.Background(), databaseURL)
+	if err != nil {
+		t.Fatalf("open postgres: %v", err)
+	}
+	defer store.Close()
+	if _, err := store.pool.Exec(context.Background(), `drop schema public cascade; create schema public`); err != nil {
+		t.Fatalf("reset schema: %v", err)
+	}
+	for _, path := range []string{"../../migrations/001_init.sql", "../../migrations/002_consumer_reliability.sql"} {
+		migration, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read migration %s: %v", path, err)
+		}
+		if _, err := store.pool.Exec(context.Background(), string(migration)); err != nil {
+			t.Fatalf("apply migration %s: %v", path, err)
+		}
+	}
+	if _, err := store.pool.Exec(context.Background(), `
+		insert into transactions (id, account_id, merchant_id, amount_cents, currency, status, correlation_id)
+		values ('txn_legacy_reserved', 'clearing', 'legacy-merchant', 100, 'USD', 'AUTHORIZED', 'trace_legacy')
+	`); err != nil {
+		t.Fatalf("seed legacy reserved account row: %v", err)
+	}
+	migration, err := os.ReadFile("../../migrations/003_funding_and_queries.sql")
+	if err != nil {
+		t.Fatalf("read funding migration: %v", err)
+	}
+	if _, err := store.pool.Exec(context.Background(), string(migration)); err != nil {
+		t.Fatalf("apply funding migration over legacy row: %v", err)
+	}
+	if _, err := store.pool.Exec(context.Background(), `
+		insert into transactions
+			(id, kind, account_id, merchant_id, amount_cents, currency, status, correlation_id)
+		values ('txn_new_reserved', 'PAYMENT', 'clearing', 'merchant', 100, 'USD', 'PENDING', 'trace_new')
+	`); err == nil {
+		t.Fatal("new payment using reserved account should violate the database constraint")
 	}
 }
