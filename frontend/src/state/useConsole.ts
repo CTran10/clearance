@@ -1,6 +1,6 @@
-import { useCallback, useMemo, useReducer } from "react";
+import { useCallback, useEffect, useMemo, useReducer } from "react";
 
-import { checkHealth, submitTransaction } from "../lib/api.ts";
+import { checkHealth, getTransaction, submitTransaction } from "../lib/api.ts";
 import { createSafeId } from "../lib/ids.ts";
 import { riskPreview } from "../lib/risk.ts";
 import { loadApiBaseUrl, saveApiBaseUrl } from "../lib/storage.ts";
@@ -29,6 +29,7 @@ type Action =
   | { type: "set-health"; health: HealthState }
   | { type: "set-submitting"; submitting: boolean }
   | { type: "add-receipt"; receipt: Receipt; correlationId: string }
+  | { type: "update-receipt-status"; transactionId: string; status: TransactionStatus }
   | { type: "save-settings"; apiBaseUrl: string; authValue: string }
   | { type: "regenerate-keys" }
   | { type: "notice"; notice: Notice }
@@ -66,6 +67,13 @@ function reducer(state: ConsoleState, action: Action): ConsoleState {
         correlationId: action.correlationId,
         idempotencyKey: action.receipt.idempotencyKey,
       };
+    case "update-receipt-status":
+      return {
+        ...state,
+        receipts: state.receipts.map((receipt) =>
+          receipt.transactionId === action.transactionId ? { ...receipt, status: action.status } : receipt,
+        ),
+      };
     case "save-settings":
       return { ...state, apiBaseUrl: action.apiBaseUrl, authValue: action.authValue };
     case "regenerate-keys":
@@ -95,6 +103,51 @@ function errorMessage(error: unknown): string {
 
 export function useConsole() {
   const [state, dispatch] = useReducer(reducer, undefined, init);
+
+  useEffect(() => {
+    const pendingTransactionIds = state.receipts
+      .filter((receipt) => receipt.status === "PENDING")
+      .map((receipt) => receipt.transactionId);
+    if (pendingTransactionIds.length === 0 || state.authValue === "") {
+      return;
+    }
+
+    let stopped = false;
+    let polling = false;
+    const refresh = async () => {
+      if (polling) {
+        return;
+      }
+      polling = true;
+      try {
+        await Promise.all(
+          pendingTransactionIds.map(async (transactionId) => {
+            try {
+              const detail = await getTransaction({
+                baseUrl: state.apiBaseUrl,
+                authValue: state.authValue,
+                transactionId,
+              });
+              if (!stopped && detail.status !== "PENDING") {
+                dispatch({ type: "update-receipt-status", transactionId, status: detail.status });
+              }
+            } catch {
+              // A temporary read failure must not erase the accepted receipt. The next interval retries it.
+            }
+          }),
+        );
+      } finally {
+        polling = false;
+      }
+    };
+
+    void refresh();
+    const interval = window.setInterval(refresh, 1_500);
+    return () => {
+      stopped = true;
+      window.clearInterval(interval);
+    };
+  }, [state.apiBaseUrl, state.authValue, state.receipts]);
 
   const saveSettings = useCallback((apiBaseUrl: string, authValue: string) => {
     const normalized = saveApiBaseUrl(apiBaseUrl);
