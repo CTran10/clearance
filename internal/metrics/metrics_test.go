@@ -1,8 +1,10 @@
 package metrics
 
 import (
+	"context"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -36,6 +38,48 @@ func TestRegistryExposesTypedApplicationAndRuntimeMetrics(t *testing.T) {
 			t.Fatalf("metrics body missing %q:\n%s", want, body)
 		}
 	}
+}
+
+func TestDefaultRegistryWrappersAndSampler(t *testing.T) {
+	Configure("wrapper-service")
+	ObserveHTTPRequest("POST", "/transactions", "202", 10*time.Millisecond)
+	KafkaPublish("transactions.created", "ok")
+	OutboxPublish("published", 5*time.Millisecond)
+	ObserveConsumerMessage("risk-service", "transactions.created", "processed", 5*time.Millisecond)
+	IncConsumerRetry("risk-service", "transactions.created")
+	IncOffsetCommitFailure("risk-service", "transactions.created")
+	SetOperationalSnapshot(OperationalSnapshot{DeadLettersOpen: 1})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	provider := &snapshotProvider{snapshot: OperationalSnapshot{ProcessedEvents: 7}}
+	StartSampler(ctx, time.Hour, provider)
+	cancel()
+	if provider.calls.Load() != 1 {
+		t.Fatalf("sampler calls = %d, want immediate collection", provider.calls.Load())
+	}
+
+	response := httptest.NewRecorder()
+	Handler().ServeHTTP(response, httptest.NewRequest("GET", "/metrics", nil))
+	body := response.Body.String()
+	for _, want := range []string{
+		`clearance_kafka_messages_published_total{result="ok",service="wrapper-service",topic="transactions.created"} 1`,
+		`clearance_outbox_publish_attempts_total{result="published",service="wrapper-service"} 1`,
+		`clearance_processed_events{service="wrapper-service"} 7`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("metrics body missing %q", want)
+		}
+	}
+}
+
+type snapshotProvider struct {
+	snapshot OperationalSnapshot
+	calls    atomic.Int32
+}
+
+func (p *snapshotProvider) OperationalMetrics(context.Context) (OperationalSnapshot, error) {
+	p.calls.Add(1)
+	return p.snapshot, nil
 }
 
 func TestRegistryTracksConsumerOutcomesAndRejectsRawCardinality(t *testing.T) {

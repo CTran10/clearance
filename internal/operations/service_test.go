@@ -3,6 +3,7 @@ package operations
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -74,11 +75,47 @@ func TestServiceRefusesProcessedOrExpiredReplayAndRequeuesOnlyDeadOutbox(t *test
 	}
 }
 
+func TestServiceRejectsInvalidReplayAndRecordsPublishFailure(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 7, 14, 12, 0, 0, 0, time.UTC)
+	store := &operationStore{deadLetter: deadletter.Record{
+		ID: "dlq_123", SourceTopic: "transactions.created", State: deadletter.StateOpen,
+		FirstFailedAt: now.Add(-time.Hour),
+	}}
+	broker := &recordingBroker{err: errors.New("broker unavailable")}
+	service := NewService(store, broker, Config{Now: func() time.Time { return now }})
+
+	if _, err := service.ReplayDeadLetter(context.Background(), "dlq_123", ""); !errors.Is(err, ErrInvalidReason) {
+		t.Fatalf("blank reason error = %v, want ErrInvalidReason", err)
+	}
+	if _, err := service.ReplayDeadLetter(context.Background(), "dlq_123", strings.Repeat("x", 257)); !errors.Is(err, ErrInvalidReason) {
+		t.Fatalf("oversized reason error = %v, want ErrInvalidReason", err)
+	}
+	if _, err := service.ReplayDeadLetter(context.Background(), "dlq_123", "broker recovered"); err == nil {
+		t.Fatal("broker failure should be returned")
+	}
+	if store.replayResult != ReplayFailed || store.replayError == "" {
+		t.Fatalf("failed replay audit = %q/%q", store.replayResult, store.replayError)
+	}
+
+	store.deadLetter.State = deadletter.StateRepublished
+	broker.err = nil
+	if _, err := service.ReplayDeadLetter(context.Background(), "dlq_123", "retry"); !errors.Is(err, ErrInvalidState) {
+		t.Fatalf("non-open replay error = %v, want ErrInvalidState", err)
+	}
+	store.deadLetter = deadletter.Record{}
+	if _, err := service.ReplayDeadLetter(context.Background(), "missing", "retry"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing replay error = %v, want ErrNotFound", err)
+	}
+}
+
 type operationStore struct {
 	deadLetter   deadletter.Record
 	processed    bool
 	replayReason string
 	replayResult ReplayResult
+	replayError  string
 	outboxStatus domain.OutboxStatus
 }
 
@@ -95,8 +132,9 @@ func (s *operationStore) StartDeadLetterReplay(_ context.Context, id, reason str
 	return "replay_123", nil
 }
 
-func (s *operationStore) FinishDeadLetterReplay(_ context.Context, _, _ string, result ReplayResult, _ string) error {
+func (s *operationStore) FinishDeadLetterReplay(_ context.Context, _, _ string, result ReplayResult, errorMessage string) error {
 	s.replayResult = result
+	s.replayError = errorMessage
 	if result == ReplayPublished {
 		s.deadLetter.State = deadletter.StateRepublished
 	}
@@ -115,10 +153,11 @@ func (s *operationStore) RequeueOutbox(_ context.Context, _ string, _ string) er
 type recordingBroker struct {
 	topic   string
 	message kafka.Message
+	err     error
 }
 
 func (b *recordingBroker) PublishMessage(_ context.Context, topic string, message kafka.Message) error {
 	b.topic = topic
 	b.message = message
-	return nil
+	return b.err
 }

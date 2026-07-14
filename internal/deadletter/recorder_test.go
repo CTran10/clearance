@@ -3,6 +3,7 @@ package deadletter
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -42,12 +43,44 @@ func TestRecorderPersistsExactMessageAndPublishesOnce(t *testing.T) {
 	}
 }
 
+func TestRecorderReturnsStorePublisherAndMarkFailures(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		store     *memoryStore
+		publisher *memoryPublisher
+		want      string
+	}{
+		{name: "persist", store: &memoryStore{upsertErr: errors.New("database unavailable")}, publisher: &memoryPublisher{}, want: "persist dead letter"},
+		{name: "publish", store: &memoryStore{}, publisher: &memoryPublisher{err: errors.New("broker unavailable")}, want: "publish dead letter"},
+		{name: "mark", store: &memoryStore{markErr: errors.New("database unavailable")}, publisher: &memoryPublisher{}, want: "mark dead letter published"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := NewRecorder("risk-service", test.store, test.publisher).Move(
+				context.Background(),
+				kafka.Message{Topic: "transactions.created", Partition: 0, Offset: 1, Value: []byte("bad")},
+				errors.New("handler failed"),
+			)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Move error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
 type memoryStore struct {
-	record Record
-	marked string
+	record    Record
+	marked    string
+	upsertErr error
+	markErr   error
 }
 
 func (s *memoryStore) UpsertDeadLetter(_ context.Context, record Record) (Record, error) {
+	if s.upsertErr != nil {
+		return Record{}, s.upsertErr
+	}
 	if s.record.ID != "" {
 		return s.record, nil
 	}
@@ -56,6 +89,9 @@ func (s *memoryStore) UpsertDeadLetter(_ context.Context, record Record) (Record
 }
 
 func (s *memoryStore) MarkDeadLetterPublished(_ context.Context, id string, publishedAt time.Time) error {
+	if s.markErr != nil {
+		return s.markErr
+	}
 	s.marked = id
 	s.record.KafkaPublishedAt = publishedAt
 	return nil
@@ -63,9 +99,10 @@ func (s *memoryStore) MarkDeadLetterPublished(_ context.Context, id string, publ
 
 type memoryPublisher struct {
 	calls int
+	err   error
 }
 
 func (p *memoryPublisher) Move(_ context.Context, _ kafka.Message) error {
 	p.calls++
-	return nil
+	return p.err
 }
