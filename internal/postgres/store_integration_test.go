@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"testing"
+	"time"
 
 	"github.com/CTran10/clearance/internal/consumer"
 	"github.com/CTran10/clearance/internal/domain"
@@ -35,12 +36,15 @@ func TestSaveConsumerOutboxIsIdempotentAndAtomic(t *testing.T) {
 	if err != nil || !created {
 		t.Fatalf("first SaveConsumerOutbox = %v, %v; want true, nil", created, err)
 	}
+	staleLastSeen := time.Now().UTC().Add(-time.Hour)
+	setProcessedEventLastSeen(t, store, "risk-service", "evt_created", staleLastSeen)
 	created, err = store.SaveConsumerOutbox(
 		context.Background(), integrationDelivery("risk-service", "evt_created"), testPayloadHash, event,
 	)
 	if err != nil || created {
 		t.Fatalf("duplicate SaveConsumerOutbox = %v, %v; want false, nil", created, err)
 	}
+	assertProcessedEventRefreshed(t, store, "risk-service", "evt_created", staleLastSeen)
 	if _, err := store.SaveConsumerOutbox(
 		context.Background(), integrationDelivery("risk-service", "evt_created"), otherPayloadHash, event,
 	); !errors.Is(err, domain.ErrEventIdentityConflict) {
@@ -87,6 +91,7 @@ func TestProcessRiskEvaluatedProducesOneAtomicLedgerOutcome(t *testing.T) {
 		CorrelationID: "trace_ledger",
 	}
 
+	staleLastSeen := time.Now().UTC().Add(-time.Hour)
 	for delivery := 1; delivery <= 2; delivery++ {
 		created, err := store.ProcessRiskEvaluated(
 			context.Background(), integrationDelivery("ledger-service", "evt_risk"), testPayloadHash, event,
@@ -97,7 +102,11 @@ func TestProcessRiskEvaluatedProducesOneAtomicLedgerOutcome(t *testing.T) {
 		if created != (delivery == 1) {
 			t.Fatalf("delivery %d created = %v", delivery, created)
 		}
+		if delivery == 1 {
+			setProcessedEventLastSeen(t, store, "ledger-service", "evt_risk", staleLastSeen)
+		}
 	}
+	assertProcessedEventRefreshed(t, store, "ledger-service", "evt_risk", staleLastSeen)
 
 	var status domain.TransactionStatus
 	if err := store.pool.QueryRow(
@@ -242,6 +251,35 @@ func assertCount(t *testing.T, store *Store, table string, want int) {
 	}
 	if got != want {
 		t.Fatalf("%s count = %d, want %d", table, got, want)
+	}
+}
+
+func setProcessedEventLastSeen(t *testing.T, store *Store, consumerName, eventID string, value time.Time) {
+	t.Helper()
+	if _, err := store.pool.Exec(
+		context.Background(),
+		`update processed_events set last_seen_at = $3 where consumer_name = $1 and event_id = $2`,
+		consumerName,
+		eventID,
+		value,
+	); err != nil {
+		t.Fatalf("set processed event last_seen_at: %v", err)
+	}
+}
+
+func assertProcessedEventRefreshed(t *testing.T, store *Store, consumerName, eventID string, stale time.Time) {
+	t.Helper()
+	var lastSeen time.Time
+	if err := store.pool.QueryRow(
+		context.Background(),
+		`select last_seen_at from processed_events where consumer_name = $1 and event_id = $2`,
+		consumerName,
+		eventID,
+	).Scan(&lastSeen); err != nil {
+		t.Fatalf("query processed event last_seen_at: %v", err)
+	}
+	if !lastSeen.After(stale) {
+		t.Fatalf("processed event last_seen_at = %s, want after stale timestamp %s", lastSeen, stale)
 	}
 }
 
