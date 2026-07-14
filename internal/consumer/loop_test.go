@@ -30,6 +30,9 @@ func TestRunLoopRetriesDeadLettersAndCommits(t *testing.T) {
 	if deadLetterer.moves != 1 {
 		t.Fatalf("dead letter moves = %d, want 1", deadLetterer.moves)
 	}
+	if deadLetterer.cause == nil || deadLetterer.cause.Error() != "process failed" {
+		t.Fatalf("dead letter cause = %v, want final handler error", deadLetterer.cause)
+	}
 	if reader.commits != 1 {
 		t.Fatalf("commits = %d, want 1", reader.commits)
 	}
@@ -57,9 +60,11 @@ func (r *fakeReader) CommitMessages(context.Context, ...kafka.Message) error {
 
 type fakeDeadLetterer struct {
 	moves int
+	cause error
 }
 
-func (d *fakeDeadLetterer) Move(context.Context, kafka.Message) error {
+func (d *fakeDeadLetterer) Move(_ context.Context, _ kafka.Message, cause error) error {
 	d.moves++
+	d.cause = cause
 	return nil
 }
