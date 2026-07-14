@@ -9,7 +9,7 @@ The goal wasn’t to build a Stripe clone or a feature-heavy fintech application
 ## Key Concepts
 
 * Idempotency keys
-* Transactional outbox pattern
+* Transactional inbox/outbox pattern
 * Event-driven service communication
 * Retry and dead-letter handling
 * Correlation IDs
@@ -136,7 +136,9 @@ Instead of publishing directly to Kafka, it writes a `TransactionCreated` event 
 
 Continuously polls pending outbox events using `FOR UPDATE SKIP LOCKED`, publishes them to Redpanda, and updates their state.
 
-Failed publishes are retried before eventually being dead-lettered.
+Failed outbox publishes are retried before the PostgreSQL row is marked
+`DEAD_LETTERED`. That terminal database state is separate from the Kafka
+dead-letter topic used by consumers.
 
 ### Risk Service
 
@@ -147,15 +149,20 @@ Current rules are intentionally simple:
 * Amounts over `$500.00` are considered high risk
 * Everything else is approved
 
-The purpose is to demonstrate service boundaries and event flow rather than risk modeling.
+The risk decision and consumed event ID are stored atomically with a
+`RiskEvaluated` outbox event. The purpose is to demonstrate service boundaries
+and event flow rather than risk modeling.
 
 ### Ledger Service
 
 Consumes risk decisions and records the outcome in an immutable ledger.
 
-Approved transactions are authorized only when the account has enough available ledger balance. Successful authorizations generate balanced ledger entries before a `TransactionAuthorized` event is published.
+Approved transactions are authorized only when the account has enough available
+ledger balance. Successful authorizations generate balanced ledger entries and a
+`TransactionAuthorized` outbox event in the same database transaction.
 
-Rejected transactions produce a `TransactionFailed` event.
+Rejected or unfunded transactions atomically produce a `TransactionFailed`
+outbox event with their final database state.
 
 ### Event Flow
 
@@ -172,11 +179,12 @@ sequenceDiagram
     Tx->>DB: Save transaction + outbox event
     Tx-->>Client: 202 Accepted
     Outbox->>Kafka: Publish TransactionCreated
-    Risk->>Kafka: Consume TransactionCreated
-    Risk->>Kafka: Publish RiskEvaluated
-    Ledger->>Kafka: Consume RiskEvaluated
-    Ledger->>DB: Write immutable ledger entries
-    Ledger->>Kafka: Publish TransactionAuthorized
+    Kafka->>Risk: Deliver TransactionCreated
+    Risk->>DB: Save processed event + RiskEvaluated outbox
+    Outbox->>Kafka: Publish RiskEvaluated
+    Kafka->>Ledger: Deliver RiskEvaluated
+    Ledger->>DB: Save processed event + outcome + final outbox
+    Outbox->>Kafka: Publish final outcome
 ```
 
 ## Persistence And Messaging
@@ -185,6 +193,7 @@ PostgreSQL stores:
 
 * Transactions
 * Idempotency keys
+* Processed Kafka event IDs and payload hashes
 * Outbox events
 * Ledger entries
 
@@ -192,9 +201,13 @@ Redis provides fixed-window rate limiting.
 
 Redpanda serves as the Kafka-compatible event broker connecting services.
 
-One of the core design decisions is the transactional outbox pattern.
+One of the core design decisions is the transactional inbox/outbox pattern.
 
-Transaction creation, idempotency storage, and event creation all occur within a single database transaction. Events are only published after they have been durably recorded, preventing inconsistencies between the database and event stream.
+Transaction creation, request idempotency storage, and event creation all occur
+within a single database transaction. Risk handling atomically stores its input
+event ID with the risk outbox event. Ledger handling atomically stores its input
+event ID, final transaction state, ledger entries, and final outbox event. Events
+are published only after they have been durably recorded.
 
 ## Reliability Patterns
 
@@ -208,15 +221,37 @@ Reusing an idempotency key with a different payload is rejected.
 
 ### Transactional Outbox
 
-Transactions and their corresponding events are written atomically.
+Every stage that changes PostgreSQL and produces a normal business event writes
+that event atomically to the shared outbox.
 
-If the database transaction succeeds, the event is guaranteed to exist and can be published later.
+If the database transaction succeeds, its successor event exists and can be
+published later. Kafka publication is at-least-once, so an event can still be
+published more than once if publication succeeds but marking the outbox row as
+published fails.
+
+### Consumer Idempotency And Ordering
+
+Kafka message keys contain the account ID so events for one account are routed
+consistently within each topic. A separate stable `event_id` header identifies
+the durable outbox event.
+
+Risk and ledger consumers store the event ID and a payload hash in the same
+PostgreSQL transaction as their database effects and successor outbox event.
+Replaying the same event ID and bytes is a successful no-op. Reusing an event ID
+with different bytes is rejected and follows the normal retry/DLQ path.
+
+This provides effectively-once database side effects for replay of the same
+event ID. It does not provide Kafka exactly-once semantics, global ordering
+across topics, or duplicate-free delivery.
 
 ### Retries And Dead-Letter Handling
 
 Publishers and consumers automatically retry transient failures.
 
-Events that exceed retry limits are moved into a dead-letter state instead of being silently dropped.
+Outbox rows that exceed retry limits are marked `DEAD_LETTERED` in PostgreSQL.
+Consumed Kafka messages that exhaust handler retries are published to the Kafka
+dead-letter topic before their source offset is committed. Neither path promises
+exactly-once dead-letter delivery.
 
 ### Correlation IDs
 
@@ -298,8 +333,10 @@ GitHub Actions runs:
 
 ```sh
 go test ./...
+go test -tags=integration ./internal/postgres
 go vet ./...
-cd frontend && npm test
+go build ./cmd/...
+cd frontend && npm ci && npm test && npm run build
 docker compose config
 ```
 
@@ -321,9 +358,11 @@ internal/
   outbox/
   postgres/
   redislimiter/
+  risk/
   transaction/
 migrations/
   001_init.sql
+  002_consumer_reliability.sql
 ```
 
 ## Known Limits
@@ -341,6 +380,9 @@ Current limitations:
 * No Grafana dashboards
 * No distributed tracing UI yet
 * No Kubernetes deployment
+* Kafka and DLQ delivery are at-least-once; duplicate broker messages remain possible
+* Processed-event records currently have no retention or replay-management tooling
+* PostgreSQL transaction guarantees have integration coverage, but there is no automated real-broker failure suite yet
 
 ## Why I Built It
 

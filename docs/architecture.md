@@ -11,14 +11,15 @@ Services:
 
 - `transaction-service`: authenticated HTTP API for `POST /transactions`.
 - `outbox-publisher`: drains PostgreSQL `outbox_events` into Redpanda/Kafka.
-- `risk-service`: consumes `transactions.created` and publishes risk decisions.
+- `risk-service`: consumes `transactions.created` and atomically records each
+  input event with a `RiskEvaluated` outbox row.
 - `ledger-service`: consumes risk decisions, writes immutable ledger entries,
-  and publishes final transaction outcomes.
+  and atomically records final transaction outcomes in the outbox.
 
 Infrastructure:
 
-- PostgreSQL stores transactions, idempotency records, outbox rows, ledger
-  entries.
+- PostgreSQL stores transactions, request idempotency records, processed-event
+  records, outbox rows, and ledger entries.
 - Redis backs fixed-window API rate limiting.
 - Redpanda provides Kafka-compatible topics.
 - Every Go service exposes `/healthz`; `/metrics` is available when
@@ -32,17 +33,21 @@ flowchart LR
     Outbox["outbox-publisher"] --> DB
     Outbox --> Kafka["Redpanda/Kafka"]
     Kafka --> Risk["risk-service"]
-    Risk --> Kafka
+    Risk --> DB
     Kafka --> Ledger["ledger-service"]
     Ledger --> DB
-    Ledger --> Kafka
 ```
 
 ## Reliability Patterns
 
 - Idempotency keys protect client retries.
-- Transactional outbox prevents losing `TransactionCreated` after a database
-  commit.
+- Every database-producing stage records its successor event in the same
+  PostgreSQL transaction as its state changes.
+- Kafka messages carry a stable `event_id` header and are partitioned by account
+  ID within each topic.
+- Consumers record `(consumer_name, event_id, payload_hash)` before committing
+  Kafka offsets. Replaying the same event ID is a successful no-op; reusing it
+  with different bytes is rejected.
 - Kafka producers require all acknowledgements.
 - Consumers retry with backoff before dead-lettering failed messages.
 - Ledger authorization checks available account balance before writing immutable,
@@ -52,10 +57,16 @@ flowchart LR
 - Optional metrics expose HTTP status counts, Kafka publish results, and outbox
   outcomes.
 
+Kafka delivery remains at-least-once. The outbox publisher can publish the same
+event again if Kafka accepts it but the database status update fails. Stable
+event IDs plus same-transaction processed-event records make database side
+effects effectively once for replay of the same event ID; they do not provide
+Kafka exactly-once semantics or duplicate-free topics.
+
 ## Active Scope
 
 - Active backend code is Go under `cmd/` and `internal/`.
-- Active database setup is SQL under `migrations/001_init.sql`.
+- Active database setup is numbered SQL under `migrations/`.
 - The active HTTP API is only `POST /transactions`, plus health and optional
   metrics.
 - The optional frontend console talks to `POST /transactions` on the Go

@@ -2,23 +2,32 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"log/slog"
+	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
 	"github.com/CTran10/clearance/internal/appenv"
 	"github.com/CTran10/clearance/internal/consumer"
-	"github.com/CTran10/clearance/internal/domain"
 	"github.com/CTran10/clearance/internal/health"
 	"github.com/CTran10/clearance/internal/kafkabus"
+	"github.com/CTran10/clearance/internal/postgres"
+	"github.com/CTran10/clearance/internal/risk"
 	"github.com/segmentio/kafka-go"
 )
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+
+	store, err := postgres.Open(ctx, appenv.Must("DATABASE_URL"))
+	if err != nil {
+		slog.Error("postgres startup failed", "err", err)
+		os.Exit(1)
+	}
+	defer store.Close()
+	service := risk.NewService(store)
 
 	brokers := appenv.CSV("KAFKA_BROKERS", []string{"redpanda:9092"})
 	reader := kafkabus.NewReader(brokers, kafkabus.TopicTransactionCreated, "risk-service")
@@ -38,29 +47,10 @@ func main() {
 		MaxAttempts:    maxAttempts,
 		RetryBaseDelay: 100 * time.Millisecond,
 	}, func(ctx context.Context, message kafka.Message) error {
-		return handle(ctx, publisher, message.Value)
+		eventID, err := kafkabus.EventID(message)
+		if err != nil {
+			return err
+		}
+		return service.HandleTransactionCreated(ctx, eventID, message.Value)
 	})
-}
-
-func handle(ctx context.Context, publisher *kafkabus.Publisher, payload []byte) error {
-	var transaction domain.Transaction
-	if err := json.Unmarshal(payload, &transaction); err != nil {
-		return err
-	}
-	evaluation := domain.EvaluateRisk(transaction.AmountCents)
-	eventPayload, err := json.Marshal(domain.RiskEvaluated{
-		TransactionID: transaction.ID,
-		AccountID:     transaction.AccountID,
-		AmountCents:   transaction.AmountCents,
-		Currency:      transaction.Currency,
-		RiskLevel:     evaluation.Level,
-		Approved:      evaluation.Approved,
-		Reason:        evaluation.Reason,
-		CorrelationID: transaction.CorrelationID,
-	})
-	if err != nil {
-		return err
-	}
-	event := domain.NewEvent(domain.EventRiskEvaluated, transaction.CorrelationID, eventPayload)
-	return publisher.Publish(ctx, kafkabus.TopicFor(event.Type), event.ID, event.CorrelationID, event.Payload)
 }

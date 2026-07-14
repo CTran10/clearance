@@ -78,8 +78,11 @@ services:
       - ./migrations:/migrations:ro
     command:
       - sh
-      - -c
-      - psql -h postgres -U clearance -d clearance -v ON_ERROR_STOP=1 -f /migrations/001_init.sql
+      - -ec
+      - |
+        for migration in /migrations/*.sql; do
+          psql -h postgres -U clearance -d clearance -v ON_ERROR_STOP=1 -f "$$migration"
+        done
 
   app:
     build: .
@@ -116,6 +119,8 @@ services:
       <<: *service-env
       HEALTH_PORT: 8082
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       redpanda:
         condition: service_healthy
     ports:

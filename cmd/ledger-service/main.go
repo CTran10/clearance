@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -11,7 +10,6 @@ import (
 
 	"github.com/CTran10/clearance/internal/appenv"
 	"github.com/CTran10/clearance/internal/consumer"
-	"github.com/CTran10/clearance/internal/domain"
 	"github.com/CTran10/clearance/internal/health"
 	"github.com/CTran10/clearance/internal/kafkabus"
 	"github.com/CTran10/clearance/internal/ledger"
@@ -39,9 +37,7 @@ func main() {
 	defer func() {
 		_ = publisher.Close()
 	}()
-	service := ledger.NewService(store, func(ctx context.Context, event domain.Event) error {
-		return publisher.Publish(ctx, kafkabus.TopicFor(event.Type), event.ID, event.CorrelationID, event.Payload)
-	})
+	service := ledger.NewService(store)
 	maxAttempts := appenv.Int("CONSUMER_MAX_ATTEMPTS", 3)
 	health.Start(ctx, ":"+appenv.String("HEALTH_PORT", "8083"), appenv.Bool("METRICS_ENABLED", false))
 
@@ -51,10 +47,10 @@ func main() {
 		MaxAttempts:    maxAttempts,
 		RetryBaseDelay: 100 * time.Millisecond,
 	}, func(ctx context.Context, message kafka.Message) error {
-		var event domain.RiskEvaluated
-		if err := json.Unmarshal(message.Value, &event); err != nil {
+		eventID, err := kafkabus.EventID(message)
+		if err != nil {
 			return err
 		}
-		return service.HandleRiskEvaluated(ctx, event)
+		return service.HandleRiskEvaluated(ctx, eventID, message.Value)
 	})
 }

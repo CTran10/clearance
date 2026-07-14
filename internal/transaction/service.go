@@ -105,7 +105,13 @@ func (s *Service) Create(ctx context.Context, request CreateRequest, metadata Re
 		Transaction:  transaction,
 		CreateResult: response,
 	}
-	event := domain.NewOutboxEvent(domain.EventTransactionCreated, metadata.CorrelationID, payload)
+	event := domain.NewOutboxEvent(
+		domain.EventTransactionCreated,
+		transaction.ID,
+		transaction.AccountID,
+		metadata.CorrelationID,
+		payload,
+	)
 	if err := s.store.Create(ctx, record, event); err != nil {
 		if errors.Is(err, ErrIdempotencyConflict) {
 			existing, ok, findErr := s.store.FindIdempotency(ctx, metadata.IdempotencyKey)

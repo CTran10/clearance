@@ -26,6 +26,10 @@ func Open(ctx context.Context, databaseURL string) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("connect postgres: %w", err)
 	}
+	if err := pool.Ping(ctx); err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("ping postgres: %w", err)
+	}
 	return &Store{pool: pool}, nil
 }
 
@@ -103,17 +107,7 @@ func (s *Store) Create(ctx context.Context, record transaction.IdempotencyRecord
 		return fmt.Errorf("insert idempotency key: %w", err)
 	}
 
-	if _, err := dbtx.Exec(
-		ctx,
-		`insert into outbox_events (id, event_type, aggregate_id, correlation_id, payload, status)
-		 values ($1, $2, $3, $4, $5, $6)`,
-		event.ID,
-		event.Type,
-		record.Transaction.ID,
-		event.CorrelationID,
-		event.Payload,
-		event.Status,
-	); err != nil {
+	if err := insertOutbox(ctx, dbtx, event); err != nil {
 		return fmt.Errorf("insert outbox event: %w", err)
 	}
 
@@ -147,6 +141,8 @@ func (s *Store) NextPending(ctx context.Context) (domain.OutboxEvent, bool, erro
 		 where outbox_events.id = next_event.id
 		returning outbox_events.id,
 		          outbox_events.event_type,
+		          outbox_events.aggregate_id,
+		          outbox_events.partition_key,
 		          outbox_events.correlation_id,
 		          outbox_events.payload,
 		          outbox_events.status,
@@ -157,6 +153,8 @@ func (s *Store) NextPending(ctx context.Context) (domain.OutboxEvent, bool, erro
 	).Scan(
 		&event.ID,
 		&event.Type,
+		&event.AggregateID,
+		&event.PartitionKey,
 		&event.CorrelationID,
 		&event.Payload,
 		&event.Status,
@@ -207,119 +205,6 @@ func (s *Store) MarkFailedAttempt(ctx context.Context, eventID string, maxAttemp
 	)
 	if err != nil {
 		return fmt.Errorf("mark outbox event failed: %w", err)
-	}
-	return nil
-}
-
-func (s *Store) Authorize(ctx context.Context, event domain.RiskEvaluated) ([]domain.LedgerEntry, error) {
-	dbtx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
-	if err != nil {
-		return nil, fmt.Errorf("begin ledger transaction: %w", err)
-	}
-	defer func() {
-		_ = dbtx.Rollback(ctx)
-	}()
-
-	transaction, err := lockPendingTransaction(ctx, dbtx, event)
-	if err != nil {
-		return nil, err
-	}
-	if err := ensureAvailableFunds(ctx, dbtx, transaction); err != nil {
-		return nil, err
-	}
-
-	// double-entry bookkeeping!! money never just "disappears" from one account — it MOVES. so every transaction
-	// is two rows that sum to zero: minus X from the user, plus X into "clearing". if you add up every ledger entry
-	// ever and it doesn't total 0, money got invented or destroyed and something is very wrong. accountants have been
-	// doing this for ~500 years and i was today years old when i learned why. it makes the books auditable + self-checking
-	entries := []domain.LedgerEntry{
-		{
-			ID:            domain.NewID("le"),
-			TransactionID: transaction.ID,
-			AccountID:     transaction.AccountID,
-			AmountCents:   -transaction.AmountCents, // debit the user
-			Currency:      transaction.Currency,
-		},
-		{
-			ID:            domain.NewID("le"),
-			TransactionID: transaction.ID,
-			AccountID:     "clearing",
-			AmountCents:   transaction.AmountCents, // credit clearing — equal + opposite, nets to 0
-			Currency:      transaction.Currency,
-		},
-	}
-	for _, entry := range entries {
-		if _, err := dbtx.Exec(
-			ctx,
-			`insert into ledger_entries (id, transaction_id, account_id, amount_cents, currency)
-			 values ($1, $2, $3, $4, $5)`,
-			entry.ID,
-			entry.TransactionID,
-			entry.AccountID,
-			entry.AmountCents,
-			entry.Currency,
-		); err != nil {
-			return nil, fmt.Errorf("insert ledger entry: %w", err)
-		}
-	}
-
-	tag, err := dbtx.Exec(
-		ctx,
-		`update transactions
-		    set status = $2, risk_level = $3, risk_reason = $4, updated_at = now()
-		  where id = $1 and status = $5`,
-		transaction.ID,
-		domain.TransactionAuthorized,
-		event.RiskLevel,
-		event.Reason,
-		domain.TransactionPending,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("mark transaction authorized: %w", err)
-	}
-	if tag.RowsAffected() != 1 {
-		return nil, fmt.Errorf("mark transaction authorized: transaction is not pending")
-	}
-
-	if err := dbtx.Commit(ctx); err != nil {
-		return nil, fmt.Errorf("commit ledger transaction: %w", err)
-	}
-	return entries, nil
-}
-
-func (s *Store) Fail(ctx context.Context, event domain.RiskEvaluated) error {
-	dbtx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
-	if err != nil {
-		return fmt.Errorf("begin fail transaction: %w", err)
-	}
-	defer func() {
-		_ = dbtx.Rollback(ctx)
-	}()
-
-	transaction, err := lockPendingTransaction(ctx, dbtx, event)
-	if err != nil {
-		return err
-	}
-
-	tag, err := dbtx.Exec(
-		ctx,
-		`update transactions
-		    set status = $2, risk_level = $3, risk_reason = $4, updated_at = now()
-		  where id = $1 and status = $5`,
-		transaction.ID,
-		domain.TransactionFailed,
-		event.RiskLevel,
-		event.Reason,
-		domain.TransactionPending,
-	)
-	if err != nil {
-		return fmt.Errorf("mark transaction failed: %w", err)
-	}
-	if tag.RowsAffected() != 1 {
-		return fmt.Errorf("mark transaction failed: transaction is not pending")
-	}
-	if err := dbtx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit fail transaction: %w", err)
 	}
 	return nil
 }

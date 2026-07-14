@@ -8,7 +8,10 @@ import (
 	"time"
 )
 
-var ErrInsufficientFunds = errors.New("insufficient funds")
+var (
+	ErrInsufficientFunds     = errors.New("insufficient funds")
+	ErrEventIdentityConflict = errors.New("event id reused with different payload")
+)
 
 type TransactionStatus string
 
@@ -81,6 +84,8 @@ type Transaction struct {
 type OutboxEvent struct {
 	ID            string       `json:"id"`
 	Type          EventType    `json:"type"`
+	AggregateID   string       `json:"aggregate_id"`
+	PartitionKey  string       `json:"partition_key"`
 	CorrelationID string       `json:"correlation_id"`
 	Payload       []byte       `json:"payload"`
 	Status        OutboxStatus `json:"status"`
@@ -88,10 +93,18 @@ type OutboxEvent struct {
 	CreatedAt     time.Time    `json:"created_at"`
 }
 
-func NewOutboxEvent(eventType EventType, correlationID string, payload []byte) OutboxEvent {
+func NewOutboxEvent(
+	eventType EventType,
+	aggregateID string,
+	partitionKey string,
+	correlationID string,
+	payload []byte,
+) OutboxEvent {
 	return OutboxEvent{
 		ID:            NewID("evt"),
 		Type:          eventType,
+		AggregateID:   aggregateID,
+		PartitionKey:  partitionKey,
 		CorrelationID: correlationID,
 		Payload:       append([]byte(nil), payload...), // defensive copy! go slices share their backing array, so if i just stored `payload` and the caller mutated their copy later, MY event would silently change too. append-onto-nil = fresh array nobody else holds
 		Status:        OutboxPending,
@@ -117,22 +130,6 @@ type LedgerEntry struct {
 	AmountCents   int64     `json:"amount_cents"`
 	Currency      string    `json:"currency"`
 	CreatedAt     time.Time `json:"created_at"`
-}
-
-type Event struct {
-	ID            string    `json:"id"`
-	Type          EventType `json:"type"`
-	CorrelationID string    `json:"correlation_id"`
-	Payload       []byte    `json:"payload"`
-}
-
-func NewEvent(eventType EventType, correlationID string, payload []byte) Event {
-	return Event{
-		ID:            NewID("msg"),
-		Type:          eventType,
-		CorrelationID: correlationID,
-		Payload:       append([]byte(nil), payload...), // same defensive copy as NewOutboxEvent — never alias the caller's slice
-	}
 }
 
 func NewID(prefix string) string {

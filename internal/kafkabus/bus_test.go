@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/CTran10/clearance/internal/domain"
 	"github.com/segmentio/kafka-go"
 )
 
@@ -27,11 +28,11 @@ func TestMoveToDeadLetterReturnsPublishError(t *testing.T) {
 
 	var moved kafka.Message
 	err := moveToDeadLetter(context.Background(), message, func(
-		context.Context,
-		string,
-		kafka.Message,
+		_ context.Context,
+		_ string,
+		deadLetter kafka.Message,
 	) error {
-		moved = message
+		moved = deadLetter
 		return want
 	})
 
@@ -95,5 +96,63 @@ func TestEventIDSupportsOnlyExplicitHeaderOrLegacyEventKey(t *testing.T) {
 				t.Fatalf("EventID() = %q, %v; want %q", got, err, tt.want)
 			}
 		})
+	}
+}
+
+func TestTopicForMapsEveryBusinessEvent(t *testing.T) {
+	t.Parallel()
+
+	tests := map[domain.EventType]string{
+		domain.EventTransactionCreated:    TopicTransactionCreated,
+		domain.EventRiskEvaluated:         TopicRiskEvaluated,
+		domain.EventTransactionAuthorized: TopicTransactionAuthorized,
+		domain.EventTransactionFailed:     TopicTransactionFailed,
+		"Unknown":                         TopicDeadLetter,
+	}
+	for eventType, want := range tests {
+		if got := TopicFor(eventType); got != want {
+			t.Fatalf("TopicFor(%q) = %q, want %q", eventType, got, want)
+		}
+	}
+}
+
+func TestTopicWritersReuseConfiguredWriter(t *testing.T) {
+	t.Parallel()
+
+	writers := newTopicWriters([]string{"127.0.0.1:1"})
+	first := writers.writer(TopicTransactionCreated)
+	second := writers.writer(TopicTransactionCreated)
+	if first != second {
+		t.Fatal("writer should be reused for the same topic")
+	}
+	if first.RequiredAcks != kafka.RequireAll {
+		t.Fatalf("required acks = %v, want RequireAll", first.RequiredAcks)
+	}
+	if _, ok := first.Balancer.(*kafka.Hash); !ok {
+		t.Fatalf("balancer = %T, want *kafka.Hash", first.Balancer)
+	}
+	if err := writers.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+}
+
+func TestPublisherReturnsCanceledContextWithoutBroker(t *testing.T) {
+	t.Parallel()
+
+	publisher := NewPublisher([]string{"127.0.0.1:1"})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := publisher.Publish(
+		ctx,
+		TopicTransactionCreated,
+		"acct_123",
+		"evt_123",
+		"trace_123",
+		[]byte(`{"id":"txn_123"}`),
+	); err == nil {
+		t.Fatal("Publish should return an error for a canceled context")
+	}
+	if err := publisher.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
 	}
 }

@@ -2,65 +2,49 @@ package ledger
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 
 	"github.com/CTran10/clearance/internal/domain"
 )
 
 type Store interface {
-	Authorize(ctx context.Context, event domain.RiskEvaluated) ([]domain.LedgerEntry, error)
-	Fail(ctx context.Context, event domain.RiskEvaluated) error
+	ProcessRiskEvaluated(
+		ctx context.Context,
+		eventID string,
+		payloadHash string,
+		event domain.RiskEvaluated,
+	) (bool, error)
 }
-
-type PublishFunc func(ctx context.Context, event domain.Event) error
 
 type Service struct {
-	store     Store
-	publisher PublishFunc
+	store Store
 }
 
-func NewService(store Store, publisher PublishFunc) *Service {
-	return &Service{store: store, publisher: publisher}
+func NewService(store Store) *Service {
+	return &Service{store: store}
 }
 
-func (s *Service) HandleRiskEvaluated(ctx context.Context, event domain.RiskEvaluated) error {
+func (s *Service) HandleRiskEvaluated(ctx context.Context, eventID string, payload []byte) error {
+	var event domain.RiskEvaluated
+	if err := json.Unmarshal(payload, &event); err != nil {
+		return fmt.Errorf("decode risk evaluated event: %w", err)
+	}
+	if event.TransactionID == "" || event.AccountID == "" || event.AmountCents <= 0 || event.Currency == "" {
+		return fmt.Errorf("risk evaluated event is incomplete")
+	}
 	if event.Approved && event.RiskLevel != domain.RiskLow {
 		return fmt.Errorf("approved risk evaluation must be low risk")
 	}
 	if !event.Approved && event.RiskLevel != domain.RiskHigh {
 		return fmt.Errorf("failed risk evaluation must be high risk")
 	}
-	if event.Approved {
-		if _, err := s.store.Authorize(ctx, event); err != nil {
-			if errors.Is(err, domain.ErrInsufficientFunds) {
-				failed := event
-				failed.Approved = false
-				failed.Reason = "insufficient funds"
-				if err := s.store.Fail(ctx, failed); err != nil {
-					return fmt.Errorf("fail transaction: %w", err)
-				}
-				return s.publish(ctx, domain.EventTransactionFailed, failed)
-			}
-			return fmt.Errorf("authorize transaction: %w", err)
-		}
-		return s.publish(ctx, domain.EventTransactionAuthorized, event)
-	}
 
-	if err := s.store.Fail(ctx, event); err != nil {
-		return fmt.Errorf("fail transaction: %w", err)
-	}
-	return s.publish(ctx, domain.EventTransactionFailed, event)
-}
-
-func (s *Service) publish(ctx context.Context, eventType domain.EventType, evaluated domain.RiskEvaluated) error {
-	payload, err := json.Marshal(evaluated)
-	if err != nil {
-		return fmt.Errorf("marshal ledger event: %w", err)
-	}
-	if err := s.publisher(ctx, domain.NewEvent(eventType, evaluated.CorrelationID, payload)); err != nil {
-		return fmt.Errorf("publish ledger event: %w", err)
+	sum := sha256.Sum256(payload)
+	if _, err := s.store.ProcessRiskEvaluated(ctx, eventID, hex.EncodeToString(sum[:]), event); err != nil {
+		return fmt.Errorf("process risk evaluation: %w", err)
 	}
 	return nil
 }

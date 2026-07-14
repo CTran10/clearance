@@ -34,7 +34,14 @@ func main() {
 	publisher := outbox.NewPublisher(
 		store,
 		func(ctx context.Context, event domain.OutboxEvent) error {
-			return broker.Publish(ctx, kafkabus.TopicFor(event.Type), event.ID, event.CorrelationID, event.Payload)
+			return broker.Publish(
+				ctx,
+				kafkabus.TopicFor(event.Type),
+				event.PartitionKey,
+				event.ID,
+				event.CorrelationID,
+				event.Payload,
+			)
 		},
 		outbox.Config{MaxAttempts: appenv.Int("OUTBOX_MAX_ATTEMPTS", 3)},
 	)
@@ -44,7 +51,7 @@ func main() {
 
 	slog.Info("outbox publisher started")
 	for {
-		if err := publisher.PublishNext(ctx); err != nil {
+		if err := publisher.PublishAvailable(ctx); err != nil {
 			slog.Warn("outbox publish attempt failed", "err", err)
 		}
 		select {

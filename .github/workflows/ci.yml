@@ -7,9 +7,24 @@ on:
   pull_request:
 
 jobs:
-  test:
+  go:
     runs-on: ubuntu-latest
-
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: clearance
+          POSTGRES_PASSWORD: clearance-test
+          POSTGRES_DB: clearance_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U clearance -d clearance_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      CLEARANCE_TEST_DATABASE_URL: postgres://clearance:clearance-test@127.0.0.1:5432/clearance_test?sslmode=disable
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -19,23 +34,51 @@ jobs:
         with:
           go-version: "1.25.x"
 
+      - name: Run unit tests
+        run: go test ./...
+
+      - name: Run PostgreSQL integration tests
+        run: go test -tags=integration ./internal/postgres
+
+      - name: Run vet
+        run: go vet ./...
+
+      - name: Build services
+        run: go build ./cmd/...
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
           node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
 
-      - name: Run tests
-        run: go test ./...
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
 
       - name: Run frontend tests
         working-directory: frontend
         run: npm test
 
-      - name: Run vet
-        run: go vet ./...
+      - name: Build frontend
+        working-directory: frontend
+        run: npm run build
+
+  compose:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Validate Docker Compose
         env:
           POSTGRES_PASSWORD: ci-local-placeholder
           TRANSACTION_API_AUTH_VALUE: ci-local-placeholder
-        run: docker compose config >/dev/null
+        run: docker compose config --quiet

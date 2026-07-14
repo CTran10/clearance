@@ -47,6 +47,13 @@ func TestSaveConsumerOutboxIsIdempotentAndAtomic(t *testing.T) {
 	}
 	assertCount(t, store, "processed_events", 1)
 	assertCount(t, store, "outbox_events", 1)
+	pending, ok, err := store.NextPending(context.Background())
+	if err != nil || !ok {
+		t.Fatalf("NextPending = %#v, %v, %v; want event, true, nil", pending, ok, err)
+	}
+	if pending.AggregateID != "txn_risk" || pending.PartitionKey != "acct_risk" {
+		t.Fatalf("pending routing = aggregate %q partition %q", pending.AggregateID, pending.PartitionKey)
+	}
 
 	_, err = store.SaveConsumerOutbox(
 		context.Background(), "risk-service", "evt_rollback", testPayloadHash, event,
@@ -190,13 +197,15 @@ func openIntegrationStore(t *testing.T) *Store {
 		t.Fatalf("list migrations: %v", err)
 	}
 	sort.Strings(migrations)
-	for _, migration := range migrations {
-		sql, err := os.ReadFile(migration)
-		if err != nil {
-			t.Fatalf("read migration %s: %v", migration, err)
-		}
-		if _, err := store.pool.Exec(context.Background(), string(sql)); err != nil {
-			t.Fatalf("apply migration %s: %v", migration, err)
+	for pass := 1; pass <= 2; pass++ {
+		for _, migration := range migrations {
+			sql, err := os.ReadFile(migration)
+			if err != nil {
+				t.Fatalf("read migration %s: %v", migration, err)
+			}
+			if _, err := store.pool.Exec(context.Background(), string(sql)); err != nil {
+				t.Fatalf("apply migration %s (pass %d): %v", migration, pass, err)
+			}
 		}
 	}
 	return store
@@ -208,14 +217,19 @@ func seedPendingTransactionAndFunds(t *testing.T, store *Store, transactionID, a
 		insert into transactions (id, account_id, merchant_id, amount_cents, currency, status, correlation_id)
 		values
 			('txn_funding', $1, 'funding', 1, 'USD', 'AUTHORIZED', 'trace_funding'),
-			($2, $1, 'merchant', 12550, 'USD', 'PENDING', 'trace_pending');
+			($2, $1, 'merchant', 12550, 'USD', 'PENDING', 'trace_pending')
+	`, accountID, transactionID)
+	if err != nil {
+		t.Fatalf("seed transactions: %v", err)
+	}
+	_, err = store.pool.Exec(context.Background(), `
 		insert into ledger_entries (id, transaction_id, account_id, amount_cents, currency)
 		values
-			('le_funding_account', 'txn_funding', $1, $3, 'USD'),
-			('le_funding_clearing', 'txn_funding', 'clearing', -$3, 'USD');
-	`, accountID, transactionID, balance)
+			('le_funding_account', 'txn_funding', $1, $2, 'USD'),
+			('le_funding_clearing', 'txn_funding', 'clearing', -$2, 'USD')
+	`, accountID, balance)
 	if err != nil {
-		t.Fatalf("seed transaction and funds: %v", err)
+		t.Fatalf("seed funds: %v", err)
 	}
 }
 
