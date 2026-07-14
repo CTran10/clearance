@@ -8,7 +8,10 @@ import (
 	"time"
 )
 
-var ErrInsufficientFunds = errors.New("insufficient funds")
+var (
+	ErrInsufficientFunds     = errors.New("insufficient funds")
+	ErrEventIdentityConflict = errors.New("event id reused with different payload")
+)
 
 type TransactionStatus string
 
@@ -16,6 +19,13 @@ const (
 	TransactionPending    TransactionStatus = "PENDING"
 	TransactionAuthorized TransactionStatus = "AUTHORIZED"
 	TransactionFailed     TransactionStatus = "FAILED"
+)
+
+type TransactionKind string
+
+const (
+	TransactionPayment TransactionKind = "PAYMENT"
+	TransactionDeposit TransactionKind = "DEPOSIT"
 )
 
 type RiskLevel string
@@ -32,6 +42,7 @@ const (
 	EventRiskEvaluated         EventType = "RiskEvaluated"
 	EventTransactionAuthorized EventType = "TransactionAuthorized"
 	EventTransactionFailed     EventType = "TransactionFailed"
+	EventFundsDeposited        EventType = "FundsDeposited"
 )
 
 type OutboxStatus string
@@ -69,29 +80,46 @@ func EvaluateRisk(amountCents int64) RiskEvaluation {
 
 type Transaction struct {
 	ID            string            `json:"id"`
+	Kind          TransactionKind   `json:"kind"`
 	AccountID     string            `json:"account_id"`
-	MerchantID    string            `json:"merchant_id"`
+	MerchantID    string            `json:"merchant_id,omitempty"`
+	FundingSource string            `json:"funding_source,omitempty"`
+	ExternalRef   string            `json:"external_reference,omitempty"`
 	AmountCents   int64             `json:"amount_cents"`
 	Currency      string            `json:"currency"`
 	Status        TransactionStatus `json:"status"`
+	RiskLevel     RiskLevel         `json:"risk_level,omitempty"`
+	RiskReason    string            `json:"risk_reason,omitempty"`
 	CorrelationID string            `json:"correlation_id"`
 	CreatedAt     time.Time         `json:"created_at"`
+	UpdatedAt     time.Time         `json:"updated_at"`
 }
 
 type OutboxEvent struct {
 	ID            string       `json:"id"`
 	Type          EventType    `json:"type"`
+	AggregateID   string       `json:"aggregate_id"`
+	PartitionKey  string       `json:"partition_key"`
 	CorrelationID string       `json:"correlation_id"`
 	Payload       []byte       `json:"payload"`
 	Status        OutboxStatus `json:"status"`
 	Attempts      int          `json:"attempts"`
+	LastError     string       `json:"last_error,omitempty"`
 	CreatedAt     time.Time    `json:"created_at"`
 }
 
-func NewOutboxEvent(eventType EventType, correlationID string, payload []byte) OutboxEvent {
+func NewOutboxEvent(
+	eventType EventType,
+	aggregateID string,
+	partitionKey string,
+	correlationID string,
+	payload []byte,
+) OutboxEvent {
 	return OutboxEvent{
 		ID:            NewID("evt"),
 		Type:          eventType,
+		AggregateID:   aggregateID,
+		PartitionKey:  partitionKey,
 		CorrelationID: correlationID,
 		Payload:       append([]byte(nil), payload...), // defensive copy! go slices share their backing array, so if i just stored `payload` and the caller mutated their copy later, MY event would silently change too. append-onto-nil = fresh array nobody else holds
 		Status:        OutboxPending,
@@ -110,6 +138,16 @@ type RiskEvaluated struct {
 	CorrelationID string    `json:"correlation_id"`
 }
 
+type FundsDeposited struct {
+	DepositID         string `json:"deposit_id"`
+	AccountID         string `json:"account_id"`
+	AmountCents       int64  `json:"amount_cents"`
+	Currency          string `json:"currency"`
+	FundingSource     string `json:"funding_source"`
+	ExternalReference string `json:"external_reference"`
+	CorrelationID     string `json:"correlation_id"`
+}
+
 type LedgerEntry struct {
 	ID            string    `json:"id"`
 	TransactionID string    `json:"transaction_id"`
@@ -117,22 +155,6 @@ type LedgerEntry struct {
 	AmountCents   int64     `json:"amount_cents"`
 	Currency      string    `json:"currency"`
 	CreatedAt     time.Time `json:"created_at"`
-}
-
-type Event struct {
-	ID            string    `json:"id"`
-	Type          EventType `json:"type"`
-	CorrelationID string    `json:"correlation_id"`
-	Payload       []byte    `json:"payload"`
-}
-
-func NewEvent(eventType EventType, correlationID string, payload []byte) Event {
-	return Event{
-		ID:            NewID("msg"),
-		Type:          eventType,
-		CorrelationID: correlationID,
-		Payload:       append([]byte(nil), payload...), // same defensive copy as NewOutboxEvent — never alias the caller's slice
-	}
 }
 
 func NewID(prefix string) string {

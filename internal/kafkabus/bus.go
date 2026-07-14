@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -17,6 +19,7 @@ const (
 	TopicRiskEvaluated         = "risk.evaluated"
 	TopicTransactionAuthorized = "transactions.authorized"
 	TopicTransactionFailed     = "transactions.failed"
+	TopicFundsDeposited        = "funding.deposited"
 	TopicDeadLetter            = "dead-letter"
 )
 
@@ -28,28 +31,45 @@ func NewPublisher(brokers []string) *Publisher {
 	return &Publisher{writers: newTopicWriters(brokers)}
 }
 
-func (p *Publisher) Publish(ctx context.Context, topic string, key string, correlationID string, payload []byte) error {
-	return p.writers.write(ctx, topic, key, correlationID, payload)
+func (p *Publisher) Publish(
+	ctx context.Context,
+	topic string,
+	partitionKey string,
+	eventID string,
+	correlationID string,
+	payload []byte,
+) error {
+	return p.writers.write(ctx, topic, partitionKey, eventID, correlationID, payload)
 }
 
 func (p *Publisher) Move(ctx context.Context, message kafka.Message) error {
-	return moveToDeadLetter(ctx, message, p.write)
+	return moveToDeadLetter(ctx, message, p.writers.writeMessage)
+}
+
+func (p *Publisher) PublishMessage(ctx context.Context, topic string, message kafka.Message) error {
+	return p.writers.writeMessage(ctx, topic, message)
 }
 
 func (p *Publisher) Close() error {
 	return p.writers.Close()
 }
 
-func (p *Publisher) write(ctx context.Context, key string, correlationID string, payload []byte) error {
-	return p.Publish(ctx, TopicDeadLetter, key, correlationID, payload)
-}
-
 func moveToDeadLetter(
 	ctx context.Context,
 	message kafka.Message,
-	writeDeadLetter func(context.Context, string, string, []byte) error,
+	writeDeadLetter func(context.Context, string, kafka.Message) error,
 ) error {
-	return writeDeadLetter(ctx, string(message.Key), correlationID(message.Headers), message.Value)
+	deadLetter := kafka.Message{
+		Key:     append([]byte(nil), message.Key...),
+		Value:   append([]byte(nil), message.Value...),
+		Headers: cloneHeaders(message.Headers),
+	}
+	deadLetter.Headers = append(deadLetter.Headers,
+		kafka.Header{Key: "source_topic", Value: []byte(message.Topic)},
+		kafka.Header{Key: "source_partition", Value: []byte(strconv.Itoa(message.Partition))},
+		kafka.Header{Key: "source_offset", Value: []byte(strconv.FormatInt(message.Offset, 10))},
+	)
+	return writeDeadLetter(ctx, TopicDeadLetter, deadLetter)
 }
 
 func NewReader(brokers []string, topic string, groupID string) *kafka.Reader {
@@ -76,21 +96,59 @@ func newTopicWriters(brokers []string) *topicWriters {
 	}
 }
 
-func (w *topicWriters) write(ctx context.Context, topic string, key string, correlationID string, payload []byte) error {
-	writer := w.writer(topic)
+func (w *topicWriters) write(
+	ctx context.Context,
+	topic string,
+	partitionKey string,
+	eventID string,
+	correlationID string,
+	payload []byte,
+) error {
+	return w.writeMessage(ctx, topic, newMessage(partitionKey, eventID, correlationID, payload))
+}
 
-	if err := writer.WriteMessages(ctx, kafka.Message{
-		Key:   []byte(key),
-		Value: payload,
-		Headers: []kafka.Header{
-			{Key: "correlation_id", Value: []byte(correlationID)},
-		},
-	}); err != nil {
-		metrics.Inc("clearance_kafka_messages_published_total", metrics.Labels{"topic": topic, "result": "error"})
+func (w *topicWriters) writeMessage(ctx context.Context, topic string, message kafka.Message) error {
+	if err := w.writer(topic).WriteMessages(ctx, message); err != nil {
+		metrics.KafkaPublish(topic, "error")
 		return fmt.Errorf("write kafka message: %w", err)
 	}
-	metrics.Inc("clearance_kafka_messages_published_total", metrics.Labels{"topic": topic, "result": "ok"})
+	metrics.KafkaPublish(topic, "ok")
 	return nil
+}
+
+func newMessage(partitionKey string, eventID string, correlationID string, payload []byte) kafka.Message {
+	return kafka.Message{
+		Key:   []byte(partitionKey),
+		Value: append([]byte(nil), payload...),
+		Headers: []kafka.Header{
+			{Key: "event_id", Value: []byte(eventID)},
+			{Key: "correlation_id", Value: []byte(correlationID)},
+		},
+	}
+}
+
+func EventID(message kafka.Message) (string, error) {
+	for _, header := range message.Headers {
+		if header.Key == "event_id" {
+			if len(header.Value) == 0 {
+				return "", fmt.Errorf("event_id header is empty")
+			}
+			return string(header.Value), nil
+		}
+	}
+	legacyKey := string(message.Key)
+	if strings.HasPrefix(legacyKey, "evt_") || strings.HasPrefix(legacyKey, "msg_") {
+		return legacyKey, nil
+	}
+	return "", fmt.Errorf("event_id header is required")
+}
+
+func cloneHeaders(headers []kafka.Header) []kafka.Header {
+	cloned := make([]kafka.Header, len(headers))
+	for i, header := range headers {
+		cloned[i] = kafka.Header{Key: header.Key, Value: append([]byte(nil), header.Value...)}
+	}
+	return cloned
 }
 
 func (w *topicWriters) writer(topic string) *kafka.Writer {
@@ -135,6 +193,8 @@ func TopicFor(eventType domain.EventType) string {
 		return TopicTransactionAuthorized
 	case domain.EventTransactionFailed:
 		return TopicTransactionFailed
+	case domain.EventFundsDeposited:
+		return TopicFundsDeposited
 	default:
 		return TopicDeadLetter
 	}

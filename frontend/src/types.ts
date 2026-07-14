@@ -26,6 +26,23 @@ export interface TransactionResponse {
   correlation_id?: string;
 }
 
+export interface TransactionDetail {
+  transaction_id: string;
+  kind: "PAYMENT" | "DEPOSIT";
+  account_id: string;
+  merchant_id?: string;
+  funding_source?: string;
+  external_reference?: string;
+  amount_cents: number;
+  currency: string;
+  status: TransactionStatus;
+  risk_level?: RiskLevel;
+  risk_reason?: string;
+  correlation_id: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface RiskPreview {
   level: RiskLevel;
   outcome: string;

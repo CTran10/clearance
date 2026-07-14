@@ -12,6 +12,7 @@ import (
 	"github.com/CTran10/clearance/internal/domain"
 	"github.com/CTran10/clearance/internal/health"
 	"github.com/CTran10/clearance/internal/kafkabus"
+	"github.com/CTran10/clearance/internal/metrics"
 	"github.com/CTran10/clearance/internal/outbox"
 	"github.com/CTran10/clearance/internal/postgres"
 )
@@ -26,6 +27,11 @@ func main() {
 		os.Exit(1)
 	}
 	defer store.Close()
+	metricsEnabled := appenv.Bool("METRICS_ENABLED", false)
+	metrics.Configure("outbox-publisher")
+	if metricsEnabled {
+		metrics.StartSampler(ctx, appenv.DurationSeconds("METRICS_SAMPLE_SECONDS", 15*time.Second), store)
+	}
 
 	broker := kafkabus.NewPublisher(appenv.CSV("KAFKA_BROKERS", []string{"redpanda:9092"}))
 	defer func() {
@@ -34,17 +40,24 @@ func main() {
 	publisher := outbox.NewPublisher(
 		store,
 		func(ctx context.Context, event domain.OutboxEvent) error {
-			return broker.Publish(ctx, kafkabus.TopicFor(event.Type), event.ID, event.CorrelationID, event.Payload)
+			return broker.Publish(
+				ctx,
+				kafkabus.TopicFor(event.Type),
+				event.PartitionKey,
+				event.ID,
+				event.CorrelationID,
+				event.Payload,
+			)
 		},
 		outbox.Config{MaxAttempts: appenv.Int("OUTBOX_MAX_ATTEMPTS", 3)},
 	)
 	ticker := time.NewTicker(appenv.DurationSeconds("OUTBOX_POLL_SECONDS", time.Second))
 	defer ticker.Stop()
-	health.Start(ctx, ":"+appenv.String("HEALTH_PORT", "8081"), appenv.Bool("METRICS_ENABLED", false))
+	health.Start(ctx, ":"+appenv.String("HEALTH_PORT", "8081"), metricsEnabled)
 
 	slog.Info("outbox publisher started")
 	for {
-		if err := publisher.PublishNext(ctx); err != nil {
+		if err := publisher.PublishAvailable(ctx); err != nil {
 			slog.Warn("outbox publish attempt failed", "err", err)
 		}
 		select {

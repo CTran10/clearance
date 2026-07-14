@@ -1,0 +1,15 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+scrape_configs:
+  - job_name: clearance
+    static_configs:
+      - targets:
+          - app:8080
+          - outbox-publisher:8081
+          - risk-service:8082
+          - ledger-service:8083

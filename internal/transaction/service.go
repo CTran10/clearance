@@ -82,6 +82,7 @@ func (s *Service) Create(ctx context.Context, request CreateRequest, metadata Re
 
 	transaction := domain.Transaction{
 		ID:            domain.NewID("txn"),
+		Kind:          domain.TransactionPayment,
 		AccountID:     normalized.AccountID,
 		MerchantID:    normalized.MerchantID,
 		AmountCents:   normalized.AmountCents,
@@ -89,6 +90,7 @@ func (s *Service) Create(ctx context.Context, request CreateRequest, metadata Re
 		Status:        domain.TransactionPending,
 		CorrelationID: metadata.CorrelationID,
 		CreatedAt:     time.Now().UTC(),
+		UpdatedAt:     time.Now().UTC(),
 	}
 	response := CreateResponse{
 		TransactionID: transaction.ID,
@@ -105,7 +107,13 @@ func (s *Service) Create(ctx context.Context, request CreateRequest, metadata Re
 		Transaction:  transaction,
 		CreateResult: response,
 	}
-	event := domain.NewOutboxEvent(domain.EventTransactionCreated, metadata.CorrelationID, payload)
+	event := domain.NewOutboxEvent(
+		domain.EventTransactionCreated,
+		transaction.ID,
+		transaction.AccountID,
+		metadata.CorrelationID,
+		payload,
+	)
 	if err := s.store.Create(ctx, record, event); err != nil {
 		if errors.Is(err, ErrIdempotencyConflict) {
 			existing, ok, findErr := s.store.FindIdempotency(ctx, metadata.IdempotencyKey)
@@ -129,6 +137,8 @@ func validate(request CreateRequest, metadata RequestMetadata) (CreateRequest, e
 
 	if !safeTokenPattern.MatchString(metadata.IdempotencyKey) ||
 		!safeTokenPattern.MatchString(request.AccountID) ||
+		request.AccountID == "clearing" ||
+		request.AccountID == "external-settlement" ||
 		!safeTokenPattern.MatchString(request.MerchantID) ||
 		!currencyPattern.MatchString(request.Currency) ||
 		request.AmountCents <= 0 {

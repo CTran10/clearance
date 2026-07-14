@@ -1,5 +1,5 @@
 import { buildTransactionHeaders } from "./transaction.ts";
-import type { TransactionPayload, TransactionResponse } from "../types.ts";
+import type { TransactionDetail, TransactionPayload, TransactionResponse } from "../types.ts";
 
 export async function parseApiError(response: Response): Promise<string> {
   let body: unknown;
@@ -61,5 +61,22 @@ export async function submitTransaction({
     method: "POST",
     headers: buildTransactionHeaders(authValue, idempotencyKey, correlationId),
     body: JSON.stringify(payload),
+  });
+}
+
+export interface GetTransactionArgs {
+  baseUrl: string;
+  authValue: string;
+  transactionId: string;
+}
+
+export async function getTransaction({
+  baseUrl,
+  authValue,
+  transactionId,
+}: GetTransactionArgs): Promise<TransactionDetail> {
+  return request<TransactionDetail>(baseUrl, `/transactions/${encodeURIComponent(transactionId)}`, {
+    method: "GET",
+    headers: { Authorization: `Bearer ${authValue}` },
   });
 }

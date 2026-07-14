@@ -3,6 +3,7 @@ package outbox
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/CTran10/clearance/internal/domain"
 	"github.com/CTran10/clearance/internal/metrics"
@@ -34,35 +35,48 @@ func NewPublisher(store Store, publish PublishFunc, config Config) *Publisher {
 	return &Publisher{store: store, publish: publish, maxAttempts: maxAttempts}
 }
 
-func (p *Publisher) PublishNext(ctx context.Context) error {
+func (p *Publisher) PublishNext(ctx context.Context) (bool, error) {
 	event, ok, err := p.store.NextPending(ctx)
 	if err != nil {
-		return fmt.Errorf("load pending outbox event: %w", err)
+		return false, fmt.Errorf("load pending outbox event: %w", err)
 	}
 	if !ok {
-		return nil
+		return false, nil
 	}
 
 	// if kafka's having a moment and publish fails, we DON'T just retry forever — that's how one poison event
 	// jams the whole queue. MarkFailedAttempt bumps a counter and once it hits maxAttempts the event gets
 	// "dead lettered" (parked aside) so the line keeps moving. learned the term "poison message" from this exact problem
+	started := time.Now()
 	if err := p.publish(ctx, event); err != nil {
 		result := "failed_attempt"
 		if event.Attempts+1 >= p.maxAttempts {
 			result = "dead_lettered" // this attempt is the one that tips it over the edge → park it
 		}
 		if markErr := p.store.MarkFailedAttempt(ctx, event.ID, p.maxAttempts); markErr != nil {
-			return fmt.Errorf("mark failed outbox event: %w", markErr)
+			return true, fmt.Errorf("mark failed outbox event: %w", markErr)
 		}
-		metrics.Inc("clearance_outbox_events_total", metrics.Labels{"result": result})
+		metrics.OutboxPublish(result, time.Since(started))
 		// note the %w — wrapping the error keeps the original cause attached so callers can errors.Is/As it later.
 		// took me a bit to stop just doing fmt.Errorf("...%v") and losing the actual error underneath
-		return fmt.Errorf("publish outbox event: %w", err)
+		return true, fmt.Errorf("publish outbox event: %w", err)
 	}
 
 	if err := p.store.MarkPublished(ctx, event.ID); err != nil {
-		return fmt.Errorf("mark published outbox event: %w", err)
+		return true, fmt.Errorf("mark published outbox event: %w", err)
 	}
-	metrics.Inc("clearance_outbox_events_total", metrics.Labels{"result": "published"})
-	return nil
+	metrics.OutboxPublish("published", time.Since(started))
+	return true, nil
+}
+
+func (p *Publisher) PublishAvailable(ctx context.Context) error {
+	for {
+		found, err := p.PublishNext(ctx)
+		if err != nil {
+			return err
+		}
+		if !found {
+			return nil
+		}
+	}
 }

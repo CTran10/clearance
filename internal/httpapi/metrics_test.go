@@ -39,7 +39,7 @@ func TestTransactionRouterExposesMetricsWhenEnabled(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
 	}
-	if got := response.Header().Get("Content-Type"); got != "text/plain; version=0.0.4" {
+	if got := response.Header().Get("Content-Type"); !strings.HasPrefix(got, "text/plain; version=0.0.4") {
 		t.Fatalf("content-type = %q, want prometheus text", got)
 	}
 }
@@ -60,7 +60,7 @@ func TestTransactionRouterCountsRequestsByStatus(t *testing.T) {
 	metricsResponse := httptest.NewRecorder()
 	handler.ServeHTTP(metricsResponse, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 
-	want := `clearance_http_requests_total{method="POST",path="/transactions",status="401"}`
+	want := `clearance_http_requests_total{method="POST",path="/transactions",service="clearance",status="401"}`
 	if !strings.Contains(metricsResponse.Body.String(), want) {
 		t.Fatalf("metrics body = %q, want counter %q", metricsResponse.Body.String(), want)
 	}
@@ -84,7 +84,7 @@ func TestTransactionRouterCollapsesUnknownMetricPaths(t *testing.T) {
 	if strings.Contains(metricsResponse.Body.String(), "/random/scan/path") {
 		t.Fatalf("metrics body should not expose raw unknown path: %q", metricsResponse.Body.String())
 	}
-	want := `clearance_http_requests_total{method="GET",path="/unknown",status="404"}`
+	want := `clearance_http_requests_total{method="GET",path="/unknown",service="clearance",status="404"}`
 	if !strings.Contains(metricsResponse.Body.String(), want) {
 		t.Fatalf("metrics body = %q, want counter %q", metricsResponse.Body.String(), want)
 	}
