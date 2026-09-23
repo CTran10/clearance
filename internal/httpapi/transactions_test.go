@@ -199,6 +199,29 @@ func TestTransactionHandlerRateLimitKeyStripsRemotePort(t *testing.T) {
 	}
 }
 
+func TestTransactionHandlerHidesRateLimiterErrors(t *testing.T) {
+	t.Parallel()
+
+	store := newTransactionMemoryStore()
+	handler := NewRouter(
+		transactionService(store),
+		&recordingLimiter{err: errTestInternal},
+		Config{AuthValue: testAuthValue()},
+	)
+	request := httptest.NewRequest(http.MethodPost, "/transactions", bytes.NewBufferString(`{}`))
+	request.Header.Set("Authorization", "Bearer "+testAuthValue())
+
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusInternalServerError || response.Body.String() != "{\"error\":\"internal error\"}\n" {
+		t.Fatalf("status/body = %d/%s, want masked limiter failure", response.Code, response.Body.String())
+	}
+	if len(store.OutboxEvents()) != 0 {
+		t.Fatal("limiter failure should not create a transaction")
+	}
+}
+
 func TestTransactionHandlerRateLimitKeyCanUseTrustedForwardedFor(t *testing.T) {
 	t.Parallel()
 
@@ -283,9 +306,10 @@ func (s *transactionMemoryStore) OutboxEvents() []domain.OutboxEvent {
 type recordingLimiter struct {
 	key     string
 	allowed bool
+	err     error
 }
 
 func (l *recordingLimiter) Allow(_ context.Context, key string) (bool, error) {
 	l.key = key
-	return l.allowed, nil
+	return l.allowed, l.err
 }

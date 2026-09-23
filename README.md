@@ -4,8 +4,6 @@ Clearance is a Go-based event-driven transaction authorization platform built to
 
 Instead of processing everything synchronously, transactions flow through an asynchronous pipeline involving transaction ingestion, risk evaluation, and ledger recording. The business logic is intentionally simple; the focus is on architecture, reliability, and failure handling.
 
-The goal wasn’t to build a Stripe clone or a feature-heavy fintech application. The goal was to learn and demonstrate the engineering tradeoffs that appear once systems become asynchronous: idempotency, event delivery guarantees, retries, dead-letter handling, immutable writes, and failure recovery.
-
 ## Key Concepts
 
 * Idempotency keys
@@ -94,7 +92,8 @@ Optional frontend console:
 
 ```sh
 cd frontend
-python3 -m http.server 5173
+npm ci
+npm run dev
 ```
 
 Open:
@@ -160,10 +159,6 @@ Accepted requests return:
 ```
 
 with a transaction in a `PENDING` state. Risk evaluation and ledger writes happen asynchronously through Redpanda.
-
-## Architecture
-
-The system is split into several focused services, each responsible for a single stage of the transaction lifecycle.
 
 ### Transaction Service
 
@@ -333,8 +328,6 @@ default. Both are local-only bindings in this Compose setup.
 
 ## Security Considerations
 
-This is an MVP, not a production fintech platform, but trust boundaries are treated seriously.
-
 Current controls include:
 
 * Bearer token authentication
@@ -346,10 +339,6 @@ Current controls include:
 * Redis-backed rate limiting
 * Error masking
 * Header validation
-
-For local development, service-to-service traffic is unencrypted.
-
-In production, TLS should be enabled at ingress and for PostgreSQL, Redis, and Redpanda connections.
 
 ## Verification
 
@@ -366,10 +355,26 @@ Run vet:
 go vet ./...
 ```
 
+Run the local checks together (Go tests, vet, build, formatting, frontend tests
+and build, and Compose validation):
+
+```sh
+cd frontend && npm ci && cd ..
+make ci-local
+```
+
+Go targets use Docker by default. With Go installed locally, use
+`make ci-local GO_DOCKER=`. PostgreSQL integration tests and the isolated
+broker-failure suite remain separate checks; see below.
+
+The PostgreSQL tests require `CLEARANCE_TEST_DATABASE_URL` and reset its public
+schema. Point it only at a dedicated, disposable test database. Without that
+variable, the integration tests are skipped.
+
 Validate Compose:
 
 ```sh
-docker compose config
+docker compose config --quiet
 ```
 
 Run the destructive, isolated real-broker suite:
@@ -378,10 +383,6 @@ Run the destructive, isolated real-broker suite:
 ./scripts/broker-failure-suite.sh
 ```
 
-The suite creates its own Compose project and ephemeral host ports, verifies
-duplicate delivery, forces a Redpanda outage and audited outbox recovery,
-injects malformed bytes, inspects the durable DLQ record, and removes its test
-volumes on exit. Do not point it at shared infrastructure.
 
 The test suite covers:
 
@@ -405,9 +406,10 @@ GitHub Actions runs:
 go test ./...
 go test -tags=integration ./internal/postgres
 go vet ./...
+make fmt-check GO_DOCKER=
 go build ./cmd/...
 cd frontend && npm ci && npm test && npm run build
-docker compose config
+docker compose config --quiet
 ./scripts/broker-failure-suite.sh
 ```
 
@@ -422,7 +424,10 @@ cmd/
   ledger-service/
 internal/
   appenv/
+  consumer/
+  deadletter/
   domain/
+  funding/
   health/
   httpapi/
   kafkabus/
@@ -435,6 +440,9 @@ internal/
   redislimiter/
   risk/
   transaction/
+frontend/
+  src/
+  test/
 migrations/
   001_init.sql
   002_consumer_reliability.sql
@@ -446,6 +454,10 @@ deploy/
 scripts/
   broker-failure-suite.sh
 ```
+
+See the [architecture guide](docs/architecture.md),
+[operations guide](docs/operations.md), and [frontend guide](frontend/README.md)
+for the event flow, recovery commands, and console layout.
 
 ## Known Limits
 

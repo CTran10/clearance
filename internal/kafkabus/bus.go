@@ -199,12 +199,3 @@ func TopicFor(eventType domain.EventType) string {
 		return TopicDeadLetter
 	}
 }
-
-func correlationID(headers []kafka.Header) string {
-	for _, header := range headers {
-		if header.Key == "correlation_id" {
-			return string(header.Value)
-		}
-	}
-	return ""
-}

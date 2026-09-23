@@ -3,13 +3,11 @@ package postgres
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 
 	"github.com/CTran10/clearance/internal/domain"
 	"github.com/CTran10/clearance/internal/funding"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 )
 
 func (s *Store) FindDepositIdempotency(ctx context.Context, key string) (funding.IdempotencyRecord, bool, error) {
@@ -155,12 +153,4 @@ func (s *Store) CreateDeposit(
 		return funding.DepositResponse{}, fmt.Errorf("commit deposit: %w", err)
 	}
 	return response, nil
-}
-
-func constraintName(err error) string {
-	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) {
-		return pgErr.ConstraintName
-	}
-	return ""
 }

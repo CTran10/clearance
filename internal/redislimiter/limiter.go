@@ -43,7 +43,7 @@ func Open(addr string, limit int, window time.Duration) *Limiter {
 }
 
 func (l *Limiter) Allow(ctx context.Context, key string) (bool, error) {
-	// CALLBACK to past-me's "this needs to move to redis later" note in the old python limiter — it's later!!
+	// CALLBACK "this needs to move to redis later" note in the old python limiter — it's later!!
 	// the counter now lives in ONE redis everyone shares, so the limit actually holds no matter how many instances run.
 	// trick: INCR returns the new count AND creates the key if missing, atomically. EXPIRE sets the window so it
 	// self-resets. both in a TxPipeline = one round trip not two. way nicer than the in-memory deque ever was
