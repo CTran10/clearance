@@ -15,11 +15,11 @@ func TestMoveToDeadLetterReturnsPublishError(t *testing.T) {
 
 	want := errors.New("broker unavailable")
 	message := kafka.Message{
-		Topic:     TopicRiskEvaluated,
+		Topic: TopicRiskEvaluated,
 		Partition: 3,
-		Offset:    42,
-		Key:       []byte("txn_123"),
-		Value:     []byte(`{"id":"txn_123"}`),
+		Offset: 42,
+		Key: []byte("txn_123"),
+		Value: []byte(`{"id":"txn_123"}`),
 		Headers: []kafka.Header{
 			{Key: "event_id", Value: []byte("evt_123")},
 			{Key: "correlation_id", Value: []byte("trace_123")},
@@ -67,9 +67,9 @@ func TestEventIDSupportsOnlyExplicitHeaderOrLegacyEventKey(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name    string
+		name string
 		message kafka.Message
-		want    string
+		want string
 		wantErr bool
 	}{
 		{
@@ -103,12 +103,12 @@ func TestTopicForMapsEveryBusinessEvent(t *testing.T) {
 	t.Parallel()
 
 	tests := map[domain.EventType]string{
-		domain.EventTransactionCreated:    TopicTransactionCreated,
-		domain.EventRiskEvaluated:         TopicRiskEvaluated,
+		domain.EventTransactionCreated: TopicTransactionCreated,
+		domain.EventRiskEvaluated: TopicRiskEvaluated,
 		domain.EventTransactionAuthorized: TopicTransactionAuthorized,
-		domain.EventTransactionFailed:     TopicTransactionFailed,
-		domain.EventFundsDeposited:        TopicFundsDeposited,
-		"Unknown":                         TopicDeadLetter,
+		domain.EventTransactionFailed: TopicTransactionFailed,
+		domain.EventFundsDeposited: TopicFundsDeposited,
+		"Unknown": TopicDeadLetter,
 	}
 	for eventType, want := range tests {
 		if got := TopicFor(eventType); got != want {
@@ -156,4 +156,13 @@ func TestPublisherReturnsCanceledContextWithoutBroker(t *testing.T) {
 	if err := publisher.Close(); err != nil {
 		t.Fatalf("Close returned error: %v", err)
 	}
+}
+
+func correlationID(headers []kafka.Header) string {
+	for _, header := range headers {
+		if header.Key == "correlation_id" {
+			return string(header.Value)
+		}
+	}
+	return ""
 }

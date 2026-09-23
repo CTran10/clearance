@@ -51,8 +51,8 @@ func main() {
 
 	slog.Info("risk service started")
 	consumer.RunLoop(ctx, reader, deadLetterer, consumer.Config{
-		Name:           risk.ConsumerName,
-		MaxAttempts:    maxAttempts,
+		Name: risk.ConsumerName,
+		MaxAttempts: maxAttempts,
 		RetryBaseDelay: 100 * time.Millisecond,
 	}, func(ctx context.Context, message kafka.Message) error {
 		eventID, err := kafkabus.EventID(message)

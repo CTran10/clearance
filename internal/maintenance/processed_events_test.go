@@ -79,10 +79,10 @@ func TestProcessedEventsServiceReportsStatsAndStoreErrors(t *testing.T) {
 }
 
 type maintenanceStore struct {
-	eligible  int64
+	eligible int64
 	batchSize int
-	reason    string
-	err       error
+	reason string
+	err error
 }
 
 func (s *maintenanceStore) ProcessedEventStats(context.Context) (Stats, error) {

@@ -22,8 +22,8 @@ type Store interface {
 type PublishFunc func(ctx context.Context, event domain.OutboxEvent) error
 
 type Publisher struct {
-	store       Store
-	publish     PublishFunc
+	store Store
+	publish PublishFunc
 	maxAttempts int
 }
 

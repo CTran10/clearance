@@ -15,12 +15,12 @@ import (
 )
 
 const (
-	TopicTransactionCreated    = "transactions.created"
-	TopicRiskEvaluated         = "risk.evaluated"
+	TopicTransactionCreated = "transactions.created"
+	TopicRiskEvaluated = "risk.evaluated"
 	TopicTransactionAuthorized = "transactions.authorized"
-	TopicTransactionFailed     = "transactions.failed"
-	TopicFundsDeposited        = "funding.deposited"
-	TopicDeadLetter            = "dead-letter"
+	TopicTransactionFailed = "transactions.failed"
+	TopicFundsDeposited = "funding.deposited"
+	TopicDeadLetter = "dead-letter"
 )
 
 type Publisher struct {
@@ -60,8 +60,8 @@ func moveToDeadLetter(
 	writeDeadLetter func(context.Context, string, kafka.Message) error,
 ) error {
 	deadLetter := kafka.Message{
-		Key:     append([]byte(nil), message.Key...),
-		Value:   append([]byte(nil), message.Value...),
+		Key: append([]byte(nil), message.Key...),
+		Value: append([]byte(nil), message.Value...),
 		Headers: cloneHeaders(message.Headers),
 	}
 	deadLetter.Headers = append(deadLetter.Headers,
@@ -74,18 +74,18 @@ func moveToDeadLetter(
 
 func NewReader(brokers []string, topic string, groupID string) *kafka.Reader {
 	return kafka.NewReader(kafka.ReaderConfig{
-		Brokers:        brokers,
-		Topic:          topic,
-		GroupID:        groupID,
+		Brokers: brokers,
+		Topic: topic,
+		GroupID: groupID,
 		CommitInterval: 0,
-		MinBytes:       1,
-		MaxBytes:       1e6,
+		MinBytes: 1,
+		MaxBytes: 1e6,
 	})
 }
 
 type topicWriters struct {
 	brokers []string
-	mu      sync.Mutex
+	mu sync.Mutex
 	writers map[string]*kafka.Writer
 }
 
@@ -118,7 +118,7 @@ func (w *topicWriters) writeMessage(ctx context.Context, topic string, message k
 
 func newMessage(partitionKey string, eventID string, correlationID string, payload []byte) kafka.Message {
 	return kafka.Message{
-		Key:   []byte(partitionKey),
+		Key: []byte(partitionKey),
 		Value: append([]byte(nil), payload...),
 		Headers: []kafka.Header{
 			{Key: "event_id", Value: []byte(eventID)},
@@ -160,10 +160,10 @@ func (w *topicWriters) writer(topic string) *kafka.Writer {
 		return writer
 	}
 	writer = &kafka.Writer{
-		Addr:         kafka.TCP(w.brokers...),
-		Topic:        topic,
+		Addr: kafka.TCP(w.brokers...),
+		Topic: topic,
 		RequiredAcks: kafka.RequireAll,
-		Balancer:     &kafka.Hash{},
+		Balancer: &kafka.Hash{},
 		BatchTimeout: 10 * time.Millisecond,
 	}
 	w.writers[topic] = writer
@@ -198,13 +198,4 @@ func TopicFor(eventType domain.EventType) string {
 	default:
 		return TopicDeadLetter
 	}
-}
-
-func correlationID(headers []kafka.Header) string {
-	for _, header := range headers {
-		if header.Key == "correlation_id" {
-			return string(header.Value)
-		}
-	}
-	return ""
 }

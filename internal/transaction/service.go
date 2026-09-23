@@ -15,37 +15,37 @@ import (
 )
 
 var (
-	ErrInvalidRequest      = errors.New("invalid transaction request")
+	ErrInvalidRequest = errors.New("invalid transaction request")
 	ErrIdempotencyConflict = errors.New("idempotency key reused with different payload")
 )
 
 var (
 	safeTokenPattern = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,128}$`)
-	currencyPattern  = regexp.MustCompile(`^[A-Z]{3}$`)
+	currencyPattern = regexp.MustCompile(`^[A-Z]{3}$`)
 )
 
 type CreateRequest struct {
-	AccountID   string
-	MerchantID  string
+	AccountID string
+	MerchantID string
 	AmountCents int64
-	Currency    string
+	Currency string
 }
 
 type RequestMetadata struct {
 	IdempotencyKey string
-	CorrelationID  string
+	CorrelationID string
 }
 
 type CreateResponse struct {
 	TransactionID string
-	Status        domain.TransactionStatus
+	Status domain.TransactionStatus
 	CorrelationID string
 }
 
 type IdempotencyRecord struct {
-	Key          string
-	RequestHash  string
-	Transaction  domain.Transaction
+	Key string
+	RequestHash string
+	Transaction domain.Transaction
 	CreateResult CreateResponse
 }
 
@@ -81,20 +81,20 @@ func (s *Service) Create(ctx context.Context, request CreateRequest, metadata Re
 	}
 
 	transaction := domain.Transaction{
-		ID:            domain.NewID("txn"),
-		Kind:          domain.TransactionPayment,
-		AccountID:     normalized.AccountID,
-		MerchantID:    normalized.MerchantID,
-		AmountCents:   normalized.AmountCents,
-		Currency:      normalized.Currency,
-		Status:        domain.TransactionPending,
+		ID: domain.NewID("txn"),
+		Kind: domain.TransactionPayment,
+		AccountID: normalized.AccountID,
+		MerchantID: normalized.MerchantID,
+		AmountCents: normalized.AmountCents,
+		Currency: normalized.Currency,
+		Status: domain.TransactionPending,
 		CorrelationID: metadata.CorrelationID,
-		CreatedAt:     time.Now().UTC(),
-		UpdatedAt:     time.Now().UTC(),
+		CreatedAt: time.Now().UTC(),
+		UpdatedAt: time.Now().UTC(),
 	}
 	response := CreateResponse{
 		TransactionID: transaction.ID,
-		Status:        transaction.Status,
+		Status: transaction.Status,
 		CorrelationID: transaction.CorrelationID,
 	}
 	payload, err := json.Marshal(transaction)
@@ -102,9 +102,9 @@ func (s *Service) Create(ctx context.Context, request CreateRequest, metadata Re
 		return CreateResponse{}, fmt.Errorf("marshal transaction created event: %w", err)
 	}
 	record := IdempotencyRecord{
-		Key:          metadata.IdempotencyKey,
-		RequestHash:  requestHash,
-		Transaction:  transaction,
+		Key: metadata.IdempotencyKey,
+		RequestHash: requestHash,
+		Transaction: transaction,
 		CreateResult: response,
 	}
 	event := domain.NewOutboxEvent(

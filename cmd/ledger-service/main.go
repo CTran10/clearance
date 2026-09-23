@@ -51,8 +51,8 @@ func main() {
 
 	slog.Info("ledger service started")
 	consumer.RunLoop(ctx, reader, deadLetterer, consumer.Config{
-		Name:           ledger.ConsumerName,
-		MaxAttempts:    maxAttempts,
+		Name: ledger.ConsumerName,
+		MaxAttempts: maxAttempts,
 		RetryBaseDelay: 100 * time.Millisecond,
 	}, func(ctx context.Context, message kafka.Message) error {
 		eventID, err := kafkabus.EventID(message)

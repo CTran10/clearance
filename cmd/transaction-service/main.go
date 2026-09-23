@@ -49,12 +49,12 @@ func main() {
 		transactionService,
 		limiter,
 		httpapi.Config{
-			AuthValue:         appenv.Must("TRANSACTION_API_AUTH_VALUE"),
-			FundingAuthValue:  appenv.Must("FUNDING_API_AUTH_VALUE"),
+			AuthValue: appenv.Must("TRANSACTION_API_AUTH_VALUE"),
+			FundingAuthValue: appenv.Must("FUNDING_API_AUTH_VALUE"),
 			OperatorAuthValue: appenv.Must("OPERATOR_API_AUTH_VALUE"),
-			AllowedOrigins:    appenv.CSV("CORS_ORIGINS", nil),
+			AllowedOrigins: appenv.CSV("CORS_ORIGINS", nil),
 			TrustForwardedFor: appenv.Bool("TRUST_X_FORWARDED_FOR", false),
-			MetricsEnabled:    metricsEnabled,
+			MetricsEnabled: metricsEnabled,
 		},
 		httpapi.WithQueryService(transaction.NewQueryService(store)),
 		httpapi.WithFundingService(funding.NewService(store, funding.Config{
@@ -62,12 +62,12 @@ func main() {
 		})),
 	)
 	server := &http.Server{
-		Addr:              ":" + appenv.String("PORT", "8080"),
-		Handler:           handler,
+		Addr: ":" + appenv.String("PORT", "8080"),
+		Handler: handler,
 		ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout:       10 * time.Second,
-		WriteTimeout:      10 * time.Second,
-		IdleTimeout:       60 * time.Second,
+		ReadTimeout: 10 * time.Second,
+		WriteTimeout: 10 * time.Second,
+		IdleTimeout: 60 * time.Second,
 	}
 
 	go func() {

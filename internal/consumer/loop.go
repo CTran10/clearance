@@ -19,16 +19,16 @@ type DeadLetterer interface {
 }
 
 type Delivery struct {
-	ConsumerName    string
-	EventID         string
-	SourceTopic     string
+	ConsumerName string
+	EventID string
+	SourceTopic string
 	SourcePartition int
-	SourceOffset    int64
+	SourceOffset int64
 }
 
 type Config struct {
-	Name           string
-	MaxAttempts    int
+	Name string
+	MaxAttempts int
 	RetryBaseDelay time.Duration
 }
 

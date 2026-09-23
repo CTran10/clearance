@@ -15,14 +15,14 @@ import (
 const defaultService = "clearance"
 
 type OperationalSnapshot struct {
-	OutboxPending                 float64
-	OutboxDeadLettered            float64
+	OutboxPending float64
+	OutboxDeadLettered float64
 	OutboxOldestPendingAgeSeconds float64
-	DeadLettersOpen               float64
-	ProcessedEvents               float64
-	PostgresPoolOpen              float64
-	PostgresPoolIdle              float64
-	PostgresPoolInUse             float64
+	DeadLettersOpen float64
+	ProcessedEvents float64
+	PostgresPoolOpen float64
+	PostgresPoolIdle float64
+	PostgresPoolInUse float64
 }
 
 type SnapshotProvider interface {
@@ -33,25 +33,25 @@ type Registry struct {
 	service string
 	handler http.Handler
 
-	httpRequests          *prometheus.CounterVec
-	httpDuration          *prometheus.HistogramVec
-	kafkaPublished        *prometheus.CounterVec
-	outboxEventsTotal     *prometheus.CounterVec
+	httpRequests *prometheus.CounterVec
+	httpDuration *prometheus.HistogramVec
+	kafkaPublished *prometheus.CounterVec
+	outboxEventsTotal *prometheus.CounterVec
 	outboxPublishDuration *prometheus.HistogramVec
-	consumerMessages      *prometheus.CounterVec
-	consumerDuration      *prometheus.HistogramVec
-	consumerRetries       *prometheus.CounterVec
+	consumerMessages *prometheus.CounterVec
+	consumerDuration *prometheus.HistogramVec
+	consumerRetries *prometheus.CounterVec
 	consumerCommitFailure *prometheus.CounterVec
-	outboxEvents          *prometheus.GaugeVec
-	outboxOldestAge       *prometheus.GaugeVec
-	deadLettersOpen       *prometheus.GaugeVec
-	processedEvents       *prometheus.GaugeVec
-	postgresPool          *prometheus.GaugeVec
+	outboxEvents *prometheus.GaugeVec
+	outboxOldestAge *prometheus.GaugeVec
+	deadLettersOpen *prometheus.GaugeVec
+	processedEvents *prometheus.GaugeVec
+	postgresPool *prometheus.GaugeVec
 }
 
 var (
 	defaultMu sync.RWMutex
-	Default   = NewRegistry(defaultService)
+	Default = NewRegistry(defaultService)
 )
 
 func NewRegistry(service string) *Registry {
@@ -66,8 +66,8 @@ func NewRegistry(service string) *Registry {
 			Help: "Total HTTP requests handled by method, normalized path, and status.",
 		}, []string{"method", "path", "service", "status"}),
 		httpDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
-			Name:    "clearance_http_request_duration_seconds",
-			Help:    "HTTP request duration in seconds.",
+			Name: "clearance_http_request_duration_seconds",
+			Help: "HTTP request duration in seconds.",
 			Buckets: prometheus.DefBuckets,
 		}, []string{"method", "path", "service"}),
 		kafkaPublished: prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -79,8 +79,8 @@ func NewRegistry(service string) *Registry {
 			Help: "Total outbox publish attempts by result.",
 		}, []string{"result", "service"}),
 		outboxPublishDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
-			Name:    "clearance_outbox_publish_duration_seconds",
-			Help:    "Outbox publish attempt duration in seconds.",
+			Name: "clearance_outbox_publish_duration_seconds",
+			Help: "Outbox publish attempt duration in seconds.",
 			Buckets: prometheus.DefBuckets,
 		}, []string{"result", "service"}),
 		consumerMessages: prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -88,8 +88,8 @@ func NewRegistry(service string) *Registry {
 			Help: "Total Kafka messages completed by consumer, topic, and result.",
 		}, []string{"consumer", "result", "service", "topic"}),
 		consumerDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
-			Name:    "clearance_consumer_message_duration_seconds",
-			Help:    "Kafka message handling duration including retries.",
+			Name: "clearance_consumer_message_duration_seconds",
+			Help: "Kafka message handling duration including retries.",
 			Buckets: prometheus.DefBuckets,
 		}, []string{"consumer", "result", "service", "topic"}),
 		consumerRetries: prometheus.NewCounterVec(prometheus.CounterOpts{

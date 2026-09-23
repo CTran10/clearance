@@ -21,7 +21,7 @@ func TestServiceReplaysExactDeadLetterAndAuditsAttempt(t *testing.T) {
 		SourceTopic: "transactions.created", SourcePartition: 1, SourceOffset: 9,
 		Key: []byte("acct_123"), Payload: []byte(`{"id":"txn_123"}`),
 		Headers: []kafka.Header{{Key: "event_id", Value: []byte("evt_123")}, {Key: "correlation_id", Value: []byte("trace_123")}},
-		State:   deadletter.StateOpen, FirstFailedAt: now.Add(-time.Hour), KafkaPublishedAt: now.Add(-time.Hour),
+		State: deadletter.StateOpen, FirstFailedAt: now.Add(-time.Hour), KafkaPublishedAt: now.Add(-time.Hour),
 	}
 	store := &operationStore{deadLetter: record}
 	broker := &recordingBroker{}
@@ -111,11 +111,11 @@ func TestServiceRejectsInvalidReplayAndRecordsPublishFailure(t *testing.T) {
 }
 
 type operationStore struct {
-	deadLetter   deadletter.Record
-	processed    bool
+	deadLetter deadletter.Record
+	processed bool
 	replayReason string
 	replayResult ReplayResult
-	replayError  string
+	replayError string
 	outboxStatus domain.OutboxStatus
 }
 
@@ -151,9 +151,9 @@ func (s *operationStore) RequeueOutbox(_ context.Context, _ string, _ string) er
 }
 
 type recordingBroker struct {
-	topic   string
+	topic string
 	message kafka.Message
-	err     error
+	err error
 }
 
 func (b *recordingBroker) PublishMessage(_ context.Context, topic string, message kafka.Message) error {

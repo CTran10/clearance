@@ -38,9 +38,9 @@ func run(ctx context.Context, args []string) error {
 	replayWindow := appenv.DurationSeconds("REPLAY_WINDOW_SECONDS", 14*24*time.Hour)
 	operationsService := operations.NewService(store, broker, operations.Config{ReplayWindow: replayWindow})
 	maintenanceService, err := maintenance.NewProcessedEventsService(store, maintenance.Config{
-		Retention:    appenv.DurationSeconds("PROCESSED_EVENT_RETENTION_SECONDS", 30*24*time.Hour),
+		Retention: appenv.DurationSeconds("PROCESSED_EVENT_RETENTION_SECONDS", 30*24*time.Hour),
 		ReplayWindow: replayWindow,
-		BatchSize:    appenv.Int("PROCESSED_EVENT_PRUNE_BATCH_SIZE", 1_000),
+		BatchSize: appenv.Int("PROCESSED_EVENT_PRUNE_BATCH_SIZE", 1_000),
 	})
 	if err != nil {
 		return err

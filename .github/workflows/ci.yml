@@ -43,6 +43,9 @@ jobs:
       - name: Run vet
         run: go vet ./...
 
+      - name: Check Go formatting
+        run: make fmt-check GO_DOCKER=
+
       - name: Build services
         run: go build ./cmd/...
 

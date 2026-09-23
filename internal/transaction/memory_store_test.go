@@ -8,15 +8,15 @@ import (
 )
 
 type MemoryStore struct {
-	mu           sync.Mutex
-	idempotent   map[string]IdempotencyRecord
+	mu sync.Mutex
+	idempotent map[string]IdempotencyRecord
 	transactions map[string]domain.Transaction
-	outbox       []domain.OutboxEvent
+	outbox []domain.OutboxEvent
 }
 
 func NewMemoryStore() *MemoryStore {
 	return &MemoryStore{
-		idempotent:   make(map[string]IdempotencyRecord),
+		idempotent: make(map[string]IdempotencyRecord),
 		transactions: make(map[string]domain.Transaction),
 	}
 }

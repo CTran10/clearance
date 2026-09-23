@@ -43,12 +43,12 @@ func (s *Service) HandleTransactionCreated(ctx context.Context, delivery consume
 	evaluation := domain.EvaluateRisk(transaction.AmountCents)
 	eventPayload, err := json.Marshal(domain.RiskEvaluated{
 		TransactionID: transaction.ID,
-		AccountID:     transaction.AccountID,
-		AmountCents:   transaction.AmountCents,
-		Currency:      transaction.Currency,
-		RiskLevel:     evaluation.Level,
-		Approved:      evaluation.Approved,
-		Reason:        evaluation.Reason,
+		AccountID: transaction.AccountID,
+		AmountCents: transaction.AmountCents,
+		Currency: transaction.Currency,
+		RiskLevel: evaluation.Level,
+		Approved: evaluation.Approved,
+		Reason: evaluation.Reason,
 		CorrelationID: transaction.CorrelationID,
 	})
 	if err != nil {

@@ -119,7 +119,7 @@ func (p *integrationDLQPublisher) Move(_ context.Context, message kafka.Message)
 }
 
 type integrationReplayBroker struct {
-	topic   string
+	topic string
 	message kafka.Message
 }
 

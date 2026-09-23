@@ -47,10 +47,10 @@ func TestRecorderReturnsStorePublisherAndMarkFailures(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name      string
-		store     *memoryStore
+		name string
+		store *memoryStore
 		publisher *memoryPublisher
-		want      string
+		want string
 	}{
 		{name: "persist", store: &memoryStore{upsertErr: errors.New("database unavailable")}, publisher: &memoryPublisher{}, want: "persist dead letter"},
 		{name: "publish", store: &memoryStore{}, publisher: &memoryPublisher{err: errors.New("broker unavailable")}, want: "publish dead letter"},
@@ -71,10 +71,10 @@ func TestRecorderReturnsStorePublisherAndMarkFailures(t *testing.T) {
 }
 
 type memoryStore struct {
-	record    Record
-	marked    string
+	record Record
+	marked string
 	upsertErr error
-	markErr   error
+	markErr error
 }
 
 func (s *memoryStore) UpsertDeadLetter(_ context.Context, record Record) (Record, error) {
@@ -99,7 +99,7 @@ func (s *memoryStore) MarkDeadLetterPublished(_ context.Context, id string, publ
 
 type memoryPublisher struct {
 	calls int
-	err   error
+	err error
 }
 
 func (p *memoryPublisher) Move(_ context.Context, _ kafka.Message) error {

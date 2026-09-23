@@ -14,15 +14,15 @@ func TestServiceCreatesIdempotentDepositEvent(t *testing.T) {
 	store := newMemoryStore()
 	service := NewService(store, Config{MaxAmountCents: 1_000_000})
 	request := DepositRequest{
-		AccountID:         "acct_123",
-		AmountCents:       25_000,
-		Currency:          "usd",
-		FundingSource:     "demo-operator",
+		AccountID: "acct_123",
+		AmountCents: 25_000,
+		Currency: "usd",
+		FundingSource: "demo-operator",
 		ExternalReference: "bank-transfer-123",
 	}
 	metadata := RequestMetadata{
 		IdempotencyKey: "fund-123",
-		CorrelationID:  "trace-123",
+		CorrelationID: "trace-123",
 		OperatorReason: "seed demo account",
 	}
 
@@ -115,15 +115,15 @@ func TestServiceReturnsConcurrentDepositWinnerAfterExternalReferenceConflict(t *
 }
 
 type memoryStore struct {
-	records   map[string]IdempotencyRecord
-	deposit   Deposit
-	event     domain.OutboxEvent
-	creates   int
+	records map[string]IdempotencyRecord
+	deposit Deposit
+	event domain.OutboxEvent
+	creates int
 	createErr error
 }
 
 type concurrentExternalReferenceStore struct {
-	record  IdempotencyRecord
+	record IdempotencyRecord
 	lookups int
 }
 
@@ -156,15 +156,15 @@ func (s *memoryStore) CreateDeposit(_ context.Context, deposit Deposit, event do
 	s.deposit = deposit
 	s.event = event
 	response := DepositResponse{
-		DepositID:         deposit.Transaction.ID,
-		TransactionID:     deposit.Transaction.ID,
-		Status:            deposit.Transaction.Status,
-		AccountID:         deposit.Transaction.AccountID,
-		AmountCents:       deposit.Transaction.AmountCents,
-		Currency:          deposit.Transaction.Currency,
+		DepositID: deposit.Transaction.ID,
+		TransactionID: deposit.Transaction.ID,
+		Status: deposit.Transaction.Status,
+		AccountID: deposit.Transaction.AccountID,
+		AmountCents: deposit.Transaction.AmountCents,
+		Currency: deposit.Transaction.Currency,
 		BalanceAfterCents: deposit.Transaction.AmountCents,
-		CorrelationID:     deposit.Transaction.CorrelationID,
-		CreatedAt:         deposit.Transaction.CreatedAt,
+		CorrelationID: deposit.Transaction.CorrelationID,
+		CreatedAt: deposit.Transaction.CreatedAt,
 	}
 	s.records[deposit.IdempotencyKey] = IdempotencyRecord{RequestHash: deposit.RequestHash, Response: response}
 	return response, nil

@@ -21,7 +21,7 @@ func testAuthValue() string {
 }
 
 type memoryRateLimiter struct {
-	mu        sync.Mutex
+	mu sync.Mutex
 	remaining int
 }
 
@@ -93,9 +93,9 @@ func TestTransactionHandlerCreatesPendingTransaction(t *testing.T) {
 	}
 
 	var payload struct {
-		TransactionID string                   `json:"transaction_id"`
-		Status        domain.TransactionStatus `json:"status"`
-		CorrelationID string                   `json:"correlation_id"`
+		TransactionID string `json:"transaction_id"`
+		Status domain.TransactionStatus `json:"status"`
+		CorrelationID string `json:"correlation_id"`
 	}
 	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
 		t.Fatalf("decode response: %v", err)
@@ -199,6 +199,29 @@ func TestTransactionHandlerRateLimitKeyStripsRemotePort(t *testing.T) {
 	}
 }
 
+func TestTransactionHandlerHidesRateLimiterErrors(t *testing.T) {
+	t.Parallel()
+
+	store := newTransactionMemoryStore()
+	handler := NewRouter(
+		transactionService(store),
+		&recordingLimiter{err: errTestInternal},
+		Config{AuthValue: testAuthValue()},
+	)
+	request := httptest.NewRequest(http.MethodPost, "/transactions", bytes.NewBufferString(`{}`))
+	request.Header.Set("Authorization", "Bearer "+testAuthValue())
+
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusInternalServerError || response.Body.String() != "{\"error\":\"internal error\"}\n" {
+		t.Fatalf("status/body = %d/%s, want masked limiter failure", response.Code, response.Body.String())
+	}
+	if len(store.OutboxEvents()) != 0 {
+		t.Fatal("limiter failure should not create a transaction")
+	}
+}
+
 func TestTransactionHandlerRateLimitKeyCanUseTrustedForwardedFor(t *testing.T) {
 	t.Parallel()
 
@@ -241,9 +264,9 @@ func transactionService(store transaction.Store) *transaction.Service {
 }
 
 type transactionMemoryStore struct {
-	mu         sync.Mutex
+	mu sync.Mutex
 	idempotent map[string]transaction.IdempotencyRecord
-	outbox     []domain.OutboxEvent
+	outbox []domain.OutboxEvent
 }
 
 func newTransactionMemoryStore() *transactionMemoryStore {
@@ -281,11 +304,12 @@ func (s *transactionMemoryStore) OutboxEvents() []domain.OutboxEvent {
 }
 
 type recordingLimiter struct {
-	key     string
+	key string
 	allowed bool
+	err error
 }
 
 func (l *recordingLimiter) Allow(_ context.Context, key string) (bool, error) {
 	l.key = key
-	return l.allowed, nil
+	return l.allowed, l.err
 }

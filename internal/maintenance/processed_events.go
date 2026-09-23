@@ -11,25 +11,25 @@ import (
 var ErrUnsafeRetention = errors.New("processed-event retention is shorter than replay window")
 
 type Config struct {
-	Retention    time.Duration
+	Retention time.Duration
 	ReplayWindow time.Duration
-	BatchSize    int
-	Now          func() time.Time
+	BatchSize int
+	Now func() time.Time
 }
 
 type Stats struct {
-	Total            int64     `json:"total"`
+	Total int64 `json:"total"`
 	OldestLastSeenAt time.Time `json:"oldest_last_seen_at,omitempty"`
 }
 
 type Preview struct {
-	Cutoff   time.Time `json:"cutoff"`
-	Eligible int64     `json:"eligible"`
+	Cutoff time.Time `json:"cutoff"`
+	Eligible int64 `json:"eligible"`
 }
 
 type Result struct {
-	Cutoff  time.Time `json:"cutoff"`
-	Deleted int64     `json:"deleted"`
+	Cutoff time.Time `json:"cutoff"`
+	Deleted int64 `json:"deleted"`
 }
 
 type Store interface {
@@ -39,10 +39,10 @@ type Store interface {
 }
 
 type ProcessedEventsService struct {
-	store     Store
+	store Store
 	retention time.Duration
 	batchSize int
-	now       func() time.Time
+	now func() time.Time
 }
 
 func NewProcessedEventsService(store Store, config Config) (*ProcessedEventsService, error) {
