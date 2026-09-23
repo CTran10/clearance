@@ -19,16 +19,16 @@ type DeadLetterer interface {
 }
 
 type Delivery struct {
-	ConsumerName    string
-	EventID         string
-	SourceTopic     string
+	ConsumerName string
+	EventID string
+	SourceTopic string
 	SourcePartition int
-	SourceOffset    int64
+	SourceOffset int64
 }
 
 type Config struct {
-	Name           string
-	MaxAttempts    int
+	Name string
+	MaxAttempts int
 	RetryBaseDelay time.Duration
 }
 
@@ -56,15 +56,13 @@ func RunLoop(ctx context.Context, reader Reader, deadLetterer DeadLetterer, conf
 			if dlqErr := deadLetterer.Move(ctx, message, err); dlqErr != nil {
 				slog.Warn(config.Name+" dead letter publish failed", "err", dlqErr)
 				metrics.ObserveConsumerMessage(config.Name, message.Topic, "dlq_error", time.Since(started))
-				// couldn't even DLQ it → do NOT commit. leave it on the topic so we try again. losing it is worse than retrying it
+
 				continue
 			}
 			result = "dlq"
 			slog.Warn(config.Name+" moved message to dead letter", "err", err)
 		}
-		// commit (= "i'm done with this message, don't redeliver it") happens AFTER we either handled it or DLQ'd it.
-		// this is "at-least-once": if we crash before committing, kafka replays the message — which is exactly why every
-		// handler downstream has to be idempotent. commit too early and a crash means the message is just gone forever
+		// Commit only after handling or durable dead-letter delivery succeeds.
 		if err := reader.CommitMessages(ctx, message); err != nil {
 			metrics.IncOffsetCommitFailure(config.Name, message.Topic)
 			slog.Warn(config.Name+" commit failed", "err", err)
@@ -86,8 +84,6 @@ func retry(ctx context.Context, maxAttempts int, baseDelay time.Duration, fn fun
 		if delay <= 0 {
 			continue
 		}
-		// the WRONG way to sleep here is time.Sleep(delay) — it ignores shutdown and the whole service hangs on ctrl-C.
-		// select-ing on ctx.Done() vs the timer means "sleep, UNLESS we're told to quit, then bail immediately". huge difference
 		timer := time.NewTimer(delay)
 		select {
 		case <-ctx.Done():

@@ -17,10 +17,10 @@ func TestServicePersistsOneRiskOutboxEventForDuplicateDelivery(t *testing.T) {
 	store := newMemoryStore()
 	service := NewService(store)
 	payload := transactionPayload(t, domain.Transaction{
-		ID:            "txn_123",
-		AccountID:     "acct_123",
-		AmountCents:   12_550,
-		Currency:      "USD",
+		ID: "txn_123",
+		AccountID: "acct_123",
+		AmountCents: 12_550,
+		Currency: "USD",
 		CorrelationID: "trace_123",
 	})
 
@@ -104,9 +104,9 @@ func riskDelivery(eventID string) consumer.Delivery {
 }
 
 type memoryStore struct {
-	mu        sync.Mutex
+	mu sync.Mutex
 	processed map[string]string
-	events    []domain.OutboxEvent
+	events []domain.OutboxEvent
 }
 
 func newMemoryStore() *memoryStore {

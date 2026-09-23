@@ -13,17 +13,7 @@
   background: var(--bg-1);
 }
 .receipt:first-child {
-  border-top-left-radius: 0;
-}
-.receipt--new {
-  animation: receipt-in var(--dur-slow) var(--ease-out-expo);
-  background: color-mix(in oklch, var(--accent-soft) 22%, var(--bg-1));
-}
-@keyframes receipt-in {
-  from {
-    opacity: 0;
-    transform: translateY(-8px);
-  }
+  background: var(--bg-2);
 }
 .receipt__head {
   display: flex;
@@ -103,26 +93,9 @@
   padding: var(--space-7) var(--space-5);
   text-align: center;
 }
-.receipts__emptymark {
-  display: grid;
-  place-items: center;
-  width: 48px;
-  height: 48px;
-  border-radius: var(--radius);
-  border: 1px solid var(--line-strong);
-  background: var(--bg-2);
-  color: var(--accent);
-  font-size: 1.4rem;
-}
 .receipts__emptytitle {
   font-weight: 640;
   color: var(--text);
-}
-.receipts__emptyhint {
-  max-width: 38ch;
-  font-size: var(--text-sm);
-  color: var(--text-faint);
-  line-height: 1.5;
 }
 
 @media (max-width: 420px) {

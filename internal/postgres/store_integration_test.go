@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	testPayloadHash  = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	testPayloadHash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	otherPayloadHash = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 )
 
@@ -83,11 +83,11 @@ func TestProcessRiskEvaluatedProducesOneAtomicLedgerOutcome(t *testing.T) {
 	seedPendingTransactionAndFunds(t, store, "txn_ledger", "acct_ledger", 20_000)
 	event := domain.RiskEvaluated{
 		TransactionID: "txn_ledger",
-		AccountID:     "acct_ledger",
-		AmountCents:   12_550,
-		Currency:      "USD",
-		RiskLevel:     domain.RiskLow,
-		Approved:      true,
+		AccountID: "acct_ledger",
+		AmountCents: 12_550,
+		Currency: "USD",
+		RiskLevel: domain.RiskLow,
+		Approved: true,
 		CorrelationID: "trace_ledger",
 	}
 

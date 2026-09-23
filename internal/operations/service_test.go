@@ -21,7 +21,7 @@ func TestServiceReplaysExactDeadLetterAndAuditsAttempt(t *testing.T) {
 		SourceTopic: "transactions.created", SourcePartition: 1, SourceOffset: 9,
 		Key: []byte("acct_123"), Payload: []byte(`{"id":"txn_123"}`),
 		Headers: []kafka.Header{{Key: "event_id", Value: []byte("evt_123")}, {Key: "correlation_id", Value: []byte("trace_123")}},
-		State:   deadletter.StateOpen, FirstFailedAt: now.Add(-time.Hour), KafkaPublishedAt: now.Add(-time.Hour),
+		State: deadletter.StateOpen, FirstFailedAt: now.Add(-time.Hour), KafkaPublishedAt: now.Add(-time.Hour),
 	}
 	store := &operationStore{deadLetter: record}
 	broker := &recordingBroker{}
@@ -84,6 +84,7 @@ func TestServiceRejectsInvalidReplayAndRecordsPublishFailure(t *testing.T) {
 		FirstFailedAt: now.Add(-time.Hour),
 	}}
 	broker := &recordingBroker{err: errors.New("broker unavailable")}
+	store.finishErr = errors.New("audit unavailable")
 	service := NewService(store, broker, Config{Now: func() time.Time { return now }})
 
 	if _, err := service.ReplayDeadLetter(context.Background(), "dlq_123", ""); !errors.Is(err, ErrInvalidReason) {
@@ -92,8 +93,8 @@ func TestServiceRejectsInvalidReplayAndRecordsPublishFailure(t *testing.T) {
 	if _, err := service.ReplayDeadLetter(context.Background(), "dlq_123", strings.Repeat("x", 257)); !errors.Is(err, ErrInvalidReason) {
 		t.Fatalf("oversized reason error = %v, want ErrInvalidReason", err)
 	}
-	if _, err := service.ReplayDeadLetter(context.Background(), "dlq_123", "broker recovered"); err == nil {
-		t.Fatal("broker failure should be returned")
+	if _, err := service.ReplayDeadLetter(context.Background(), "dlq_123", "broker recovered"); !errors.Is(err, broker.err) || !errors.Is(err, store.finishErr) {
+		t.Fatalf("replay error = %v, want both broker and audit failures", err)
 	}
 	if store.replayResult != ReplayFailed || store.replayError == "" {
 		t.Fatalf("failed replay audit = %q/%q", store.replayResult, store.replayError)
@@ -111,11 +112,12 @@ func TestServiceRejectsInvalidReplayAndRecordsPublishFailure(t *testing.T) {
 }
 
 type operationStore struct {
-	deadLetter   deadletter.Record
-	processed    bool
+	deadLetter deadletter.Record
+	processed bool
 	replayReason string
 	replayResult ReplayResult
-	replayError  string
+	replayError string
+	finishErr error
 	outboxStatus domain.OutboxStatus
 }
 
@@ -138,7 +140,7 @@ func (s *operationStore) FinishDeadLetterReplay(_ context.Context, _, _ string, 
 	if result == ReplayPublished {
 		s.deadLetter.State = deadletter.StateRepublished
 	}
-	return nil
+	return s.finishErr
 }
 
 func (s *operationStore) GetOutboxStatus(context.Context, string) (domain.OutboxStatus, bool, error) {
@@ -151,9 +153,9 @@ func (s *operationStore) RequeueOutbox(_ context.Context, _ string, _ string) er
 }
 
 type recordingBroker struct {
-	topic   string
+	topic string
 	message kafka.Message
-	err     error
+	err error
 }
 
 func (b *recordingBroker) PublishMessage(_ context.Context, topic string, message kafka.Message) error {

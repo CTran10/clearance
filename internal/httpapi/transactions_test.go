@@ -21,7 +21,7 @@ func testAuthValue() string {
 }
 
 type memoryRateLimiter struct {
-	mu        sync.Mutex
+	mu sync.Mutex
 	remaining int
 }
 
@@ -38,6 +38,27 @@ func (l *memoryRateLimiter) Allow(context.Context, string) (bool, error) {
 	}
 	l.remaining--
 	return true, nil
+}
+
+func TestRateLimitKeyUsesOnlyFirstForwardedAddress(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		header string
+		want string
+	}{
+		{"", "192.0.2.1"},
+		{"invalid, 198.51.100.1", "192.0.2.1"},
+		{", 198.51.100.1", "192.0.2.1"},
+		{" 198.51.100.1, 203.0.113.1", "198.51.100.1"},
+		{"2001:db8::1, 203.0.113.1", "2001:db8::1"},
+	} {
+		request := httptest.NewRequest(http.MethodPost, "/transactions", nil)
+		request.RemoteAddr = "192.0.2.1:1234"
+		request.Header.Set("X-Forwarded-For", test.header)
+		if got := rateLimitKey(request, true); got != test.want {
+			t.Errorf("forwarded %q: got %q, want %q", test.header, got, test.want)
+		}
+	}
 }
 
 func TestTransactionHandlerRequiresBearerToken(t *testing.T) {
@@ -93,9 +114,9 @@ func TestTransactionHandlerCreatesPendingTransaction(t *testing.T) {
 	}
 
 	var payload struct {
-		TransactionID string                   `json:"transaction_id"`
-		Status        domain.TransactionStatus `json:"status"`
-		CorrelationID string                   `json:"correlation_id"`
+		TransactionID string `json:"transaction_id"`
+		Status domain.TransactionStatus `json:"status"`
+		CorrelationID string `json:"correlation_id"`
 	}
 	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
 		t.Fatalf("decode response: %v", err)
@@ -136,10 +157,6 @@ func TestTransactionHandlerHidesInternalErrors(t *testing.T) {
 	if response.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want %d", response.Code, http.StatusInternalServerError)
 	}
-	// the failingStore i wired up errors with a fake "database password" string in its message ON PURPOSE.
-	// the actual assertion is: that string must NOT appear in the response body. classic leak — you catch an
-	// error and lazily do w.Write([]byte(err.Error())), and now your stack traces / db creds get shipped to the
-	// client. user gets a boring "internal error", the juicy details go to the logs only. testing the absence of a thing!
 	if bytes.Contains(response.Body.Bytes(), []byte("database password")) {
 		t.Fatal("response leaked internal error details")
 	}
@@ -199,6 +216,29 @@ func TestTransactionHandlerRateLimitKeyStripsRemotePort(t *testing.T) {
 	}
 }
 
+func TestTransactionHandlerHidesRateLimiterErrors(t *testing.T) {
+	t.Parallel()
+
+	store := newTransactionMemoryStore()
+	handler := NewRouter(
+		transactionService(store),
+		&recordingLimiter{err: errTestInternal},
+		Config{AuthValue: testAuthValue()},
+	)
+	request := httptest.NewRequest(http.MethodPost, "/transactions", bytes.NewBufferString(`{}`))
+	request.Header.Set("Authorization", "Bearer "+testAuthValue())
+
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusInternalServerError || response.Body.String() != "{\"error\":\"internal error\"}\n" {
+		t.Fatalf("status/body = %d/%s, want masked limiter failure", response.Code, response.Body.String())
+	}
+	if len(store.OutboxEvents()) != 0 {
+		t.Fatal("limiter failure should not create a transaction")
+	}
+}
+
 func TestTransactionHandlerRateLimitKeyCanUseTrustedForwardedFor(t *testing.T) {
 	t.Parallel()
 
@@ -241,9 +281,9 @@ func transactionService(store transaction.Store) *transaction.Service {
 }
 
 type transactionMemoryStore struct {
-	mu         sync.Mutex
+	mu sync.Mutex
 	idempotent map[string]transaction.IdempotencyRecord
-	outbox     []domain.OutboxEvent
+	outbox []domain.OutboxEvent
 }
 
 func newTransactionMemoryStore() *transactionMemoryStore {
@@ -281,11 +321,12 @@ func (s *transactionMemoryStore) OutboxEvents() []domain.OutboxEvent {
 }
 
 type recordingLimiter struct {
-	key     string
+	key string
 	allowed bool
+	err error
 }
 
 func (l *recordingLimiter) Allow(_ context.Context, key string) (bool, error) {
 	l.key = key
-	return l.allowed, nil
+	return l.allowed, l.err
 }

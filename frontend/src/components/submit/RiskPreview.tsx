@@ -1,7 +1,6 @@
 import { centsToDollarString, formatAmountCents } from "../../lib/format.ts";
 import { riskPreview } from "../../lib/risk.ts";
 import { riskTone } from "../../lib/receipts.ts";
-import { StatusPill } from "../ui/StatusPill.tsx";
 
 interface RiskPreviewProps {
   amountCents: string;
@@ -28,12 +27,11 @@ export function RiskPreview({ amountCents, currency }: RiskPreviewProps) {
   return (
     <div className="riskpreview" data-tone={tone}>
       <div className="riskpreview__main">
-        <span className="riskpreview__eyebrow">Submitting</span>
+        <span className="riskpreview__eyebrow">Amount</span>
         <div className="riskpreview__amount mono">{formatAmountCents(cents, currency)}</div>
       </div>
       <div className="riskpreview__verdict">
-        <StatusPill tone={tone} label={`${preview.level} risk`} />
-        <span className="riskpreview__outcome">{preview.outcome}</span>
+        <span className="pill">{preview.level} risk</span>
         <span className="riskpreview__reason">{preview.reason}</span>
       </div>
     </div>

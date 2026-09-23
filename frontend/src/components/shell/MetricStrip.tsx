@@ -7,7 +7,7 @@ interface MetricStripProps {
 function Stat({ label, value, tone }: { label: string; value: number; tone?: string }) {
   return (
     <div className="metric">
-      <span className="metric__value mono" data-tone={tone}>
+      <span className="metric__value" data-tone={tone}>
         {value}
       </span>
       <span className="metric__label">{label}</span>

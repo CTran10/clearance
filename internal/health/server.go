@@ -12,12 +12,12 @@ import (
 
 func Start(ctx context.Context, addr string, metricsEnabled bool) {
 	server := &http.Server{
-		Addr:              addr,
-		Handler:           handler(metricsEnabled),
+		Addr: addr,
+		Handler: handler(metricsEnabled),
 		ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout:       10 * time.Second,
-		WriteTimeout:      10 * time.Second,
-		IdleTimeout:       60 * time.Second,
+		ReadTimeout: 10 * time.Second,
+		WriteTimeout: 10 * time.Second,
+		IdleTimeout: 60 * time.Second,
 	}
 
 	go func() {

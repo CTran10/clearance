@@ -16,14 +16,14 @@ import (
 )
 
 var (
-	ErrInvalidRequest            = errors.New("invalid deposit request")
-	ErrIdempotencyConflict       = errors.New("deposit idempotency key reused with different payload")
+	ErrInvalidRequest = errors.New("invalid deposit request")
+	ErrIdempotencyConflict = errors.New("deposit idempotency key reused with different payload")
 	ErrExternalReferenceConflict = errors.New("deposit external reference already used")
 )
 
 var (
 	safeTokenPattern = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,128}$`)
-	currencyPattern  = regexp.MustCompile(`^[A-Z]{3}$`)
+	currencyPattern = regexp.MustCompile(`^[A-Z]{3}$`)
 )
 
 const settlementAccount = "external-settlement"
@@ -33,41 +33,41 @@ type Config struct {
 }
 
 type DepositRequest struct {
-	AccountID         string
-	AmountCents       int64
-	Currency          string
-	FundingSource     string
+	AccountID string
+	AmountCents int64
+	Currency string
+	FundingSource string
 	ExternalReference string
 }
 
 type RequestMetadata struct {
 	IdempotencyKey string
-	CorrelationID  string
+	CorrelationID string
 	OperatorReason string
 }
 
 type DepositResponse struct {
-	DepositID         string                   `json:"deposit_id"`
-	TransactionID     string                   `json:"transaction_id"`
-	Status            domain.TransactionStatus `json:"status"`
-	AccountID         string                   `json:"account_id"`
-	AmountCents       int64                    `json:"amount_cents"`
-	Currency          string                   `json:"currency"`
-	BalanceAfterCents int64                    `json:"balance_after_cents"`
-	CorrelationID     string                   `json:"correlation_id"`
-	CreatedAt         time.Time                `json:"created_at"`
+	DepositID string `json:"deposit_id"`
+	TransactionID string `json:"transaction_id"`
+	Status domain.TransactionStatus `json:"status"`
+	AccountID string `json:"account_id"`
+	AmountCents int64 `json:"amount_cents"`
+	Currency string `json:"currency"`
+	BalanceAfterCents int64 `json:"balance_after_cents"`
+	CorrelationID string `json:"correlation_id"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 type IdempotencyRecord struct {
 	RequestHash string
-	Response    DepositResponse
+	Response DepositResponse
 }
 
 type Deposit struct {
 	IdempotencyKey string
-	RequestHash    string
+	RequestHash string
 	OperatorReason string
-	Transaction    domain.Transaction
+	Transaction domain.Transaction
 }
 
 type Store interface {
@@ -76,7 +76,7 @@ type Store interface {
 }
 
 type Service struct {
-	store          Store
+	store Store
 	maxAmountCents int64
 }
 
@@ -108,17 +108,17 @@ func (s *Service) Deposit(ctx context.Context, request DepositRequest, metadata 
 
 	now := time.Now().UTC()
 	transaction := domain.Transaction{
-		ID:            domain.NewID("dep"),
-		Kind:          domain.TransactionDeposit,
-		AccountID:     request.AccountID,
+		ID: domain.NewID("dep"),
+		Kind: domain.TransactionDeposit,
+		AccountID: request.AccountID,
 		FundingSource: request.FundingSource,
-		ExternalRef:   request.ExternalReference,
-		AmountCents:   request.AmountCents,
-		Currency:      request.Currency,
-		Status:        domain.TransactionAuthorized,
+		ExternalRef: request.ExternalReference,
+		AmountCents: request.AmountCents,
+		Currency: request.Currency,
+		Status: domain.TransactionAuthorized,
 		CorrelationID: metadata.CorrelationID,
-		CreatedAt:     now,
-		UpdatedAt:     now,
+		CreatedAt: now,
+		UpdatedAt: now,
 	}
 	payload, err := json.Marshal(domain.FundsDeposited{
 		DepositID: transaction.ID, AccountID: transaction.AccountID,
@@ -138,9 +138,9 @@ func (s *Service) Deposit(ctx context.Context, request DepositRequest, metadata 
 	)
 	deposit := Deposit{
 		IdempotencyKey: metadata.IdempotencyKey,
-		RequestHash:    requestHash,
+		RequestHash: requestHash,
 		OperatorReason: metadata.OperatorReason,
-		Transaction:    transaction,
+		Transaction: transaction,
 	}
 	response, err := s.store.CreateDeposit(ctx, deposit, event)
 	if err == nil {

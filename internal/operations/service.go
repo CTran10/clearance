@@ -14,23 +14,23 @@ import (
 )
 
 var (
-	ErrNotFound            = errors.New("operation target not found")
-	ErrAlreadyProcessed    = errors.New("event was already processed")
+	ErrNotFound = errors.New("operation target not found")
+	ErrAlreadyProcessed = errors.New("event was already processed")
 	ErrReplayWindowExpired = errors.New("replay window expired")
-	ErrInvalidState        = errors.New("operation target is in an invalid state")
-	ErrInvalidReason       = errors.New("operator reason is invalid")
+	ErrInvalidState = errors.New("operation target is in an invalid state")
+	ErrInvalidReason = errors.New("operator reason is invalid")
 )
 
 type ReplayResult string
 
 const (
 	ReplayPublished ReplayResult = "PUBLISHED"
-	ReplayFailed    ReplayResult = "FAILED"
+	ReplayFailed ReplayResult = "FAILED"
 )
 
 type Config struct {
 	ReplayWindow time.Duration
-	Now          func() time.Time
+	Now func() time.Time
 }
 
 type Store interface {
@@ -47,10 +47,10 @@ type Broker interface {
 }
 
 type Service struct {
-	store        Store
-	broker       Broker
+	store Store
+	broker Broker
 	replayWindow time.Duration
-	now          func() time.Time
+	now func() time.Time
 }
 
 func NewService(store Store, broker Broker, config Config) *Service {
@@ -100,7 +100,9 @@ func (s *Service) ReplayDeadLetter(ctx context.Context, id, reason string) (dead
 		Headers: cloneHeaders(record.Headers),
 	}
 	if err := s.broker.PublishMessage(ctx, record.SourceTopic, message); err != nil {
-		_ = s.store.FinishDeadLetterReplay(ctx, attemptID, record.ID, ReplayFailed, boundedError(err))
+		if finishErr := s.store.FinishDeadLetterReplay(ctx, attemptID, record.ID, ReplayFailed, boundedError(err)); finishErr != nil {
+			err = errors.Join(err, fmt.Errorf("record failed replay: %w", finishErr))
+		}
 		return deadletter.Record{}, fmt.Errorf("publish dead letter replay: %w", err)
 	}
 	if err := s.store.FinishDeadLetterReplay(ctx, attemptID, record.ID, ReplayPublished, ""); err != nil {

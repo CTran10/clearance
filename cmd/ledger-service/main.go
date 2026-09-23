@@ -37,13 +37,9 @@ func main() {
 
 	brokers := appenv.CSV("KAFKA_BROKERS", []string{"redpanda:9092"})
 	reader := kafkabus.NewReader(brokers, kafkabus.TopicRiskEvaluated, "ledger-service")
-	defer func() {
-		_ = reader.Close()
-	}()
+	defer reader.Close()
 	publisher := kafkabus.NewPublisher(brokers)
-	defer func() {
-		_ = publisher.Close()
-	}()
+	defer publisher.Close()
 	service := ledger.NewService(store)
 	maxAttempts := appenv.Int("CONSUMER_MAX_ATTEMPTS", 3)
 	deadLetterer := deadletter.NewRecorder(ledger.ConsumerName, store, publisher)
@@ -51,8 +47,8 @@ func main() {
 
 	slog.Info("ledger service started")
 	consumer.RunLoop(ctx, reader, deadLetterer, consumer.Config{
-		Name:           ledger.ConsumerName,
-		MaxAttempts:    maxAttempts,
+		Name: ledger.ConsumerName,
+		MaxAttempts: maxAttempts,
 		RetryBaseDelay: 100 * time.Millisecond,
 	}, func(ctx context.Context, message kafka.Message) error {
 		eventID, err := kafkabus.EventID(message)

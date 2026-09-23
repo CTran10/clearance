@@ -8,21 +8,16 @@ import (
 	"github.com/CTran10/clearance/internal/domain"
 )
 
-// writing this test BEFORE the code exists feels backwards but it's the contract i want the new Go service to honor.
-// the big new idea moving off the python monolith: the "transactional outbox". instead of saving the txn AND
-// firing an event to kafka separately (where the 2nd one can fail and you lose the event forever), you write the
-// event into a plain db table in the SAME transaction as the txn. either both land or neither does. a separate
-// publisher drains that table later. took me a few diagrams to believe it but it kills the "saved but never published" ghost
 func TestServiceCreatesPendingTransactionAndOutboxEvent(t *testing.T) {
-	t.Parallel() // go runs t.Parallel() tests concurrently — caught a shared-state bug in my store this way, 10/10 recommend
+	t.Parallel()
 
 	store := NewMemoryStore()
 	service := NewService(store)
 	request := CreateRequest{
-		AccountID:   "acct_123",
-		MerchantID:  "merchant_123",
-		AmountCents: 12_550, // MONEY AS INTEGER CENTS. never floats. 0.1 + 0.2 != 0.3 in float land and that's a lawsuit waiting to happen
-		Currency:    "USD",
+		AccountID: "acct_123",
+		MerchantID: "merchant_123",
+		AmountCents: 12_550,
+		Currency: "USD",
 	}
 	metadata := RequestMetadata{IdempotencyKey: "idem-123", CorrelationID: "trace-123"}
 
@@ -62,10 +57,10 @@ func TestServiceReplaysSameIdempotencyKeyAndRejectsPayloadMismatch(t *testing.T)
 	store := NewMemoryStore()
 	service := NewService(store)
 	request := CreateRequest{
-		AccountID:   "acct_123",
-		MerchantID:  "merchant_123",
+		AccountID: "acct_123",
+		MerchantID: "merchant_123",
 		AmountCents: 12_550,
-		Currency:    "USD",
+		Currency: "USD",
 	}
 	metadata := RequestMetadata{IdempotencyKey: "idem-123", CorrelationID: "trace-123"}
 
@@ -73,7 +68,9 @@ func TestServiceReplaysSameIdempotencyKeyAndRejectsPayloadMismatch(t *testing.T)
 	if err != nil {
 		t.Fatalf("Create returned error: %v", err)
 	}
-	replayed, err := service.Create(context.Background(), request, metadata)
+	padded := metadata
+	padded.IdempotencyKey = " " + metadata.IdempotencyKey + " "
+	replayed, err := service.Create(context.Background(), request, padded)
 	if err != nil {
 		t.Fatalf("Create replay returned error: %v", err)
 	}
@@ -95,18 +92,18 @@ func TestServiceReplaysSamePayloadAfterConcurrentIdempotencyInsert(t *testing.T)
 	t.Parallel()
 
 	request := CreateRequest{
-		AccountID:   "acct_123",
-		MerchantID:  "merchant_123",
+		AccountID: "acct_123",
+		MerchantID: "merchant_123",
 		AmountCents: 12_550,
-		Currency:    "USD",
+		Currency: "USD",
 	}
 	metadata := RequestMetadata{IdempotencyKey: "idem-123", CorrelationID: "trace-123"}
 	existing := IdempotencyRecord{
-		Key:         metadata.IdempotencyKey,
+		Key: metadata.IdempotencyKey,
 		RequestHash: hashRequest(request),
 		CreateResult: CreateResponse{
 			TransactionID: "txn_existing",
-			Status:        domain.TransactionPending,
+			Status: domain.TransactionPending,
 			CorrelationID: metadata.CorrelationID,
 		},
 	}
@@ -127,47 +124,47 @@ func TestServiceValidatesTrustedInput(t *testing.T) {
 	service := NewService(NewMemoryStore())
 
 	tests := []struct {
-		name     string
-		request  CreateRequest
+		name string
+		request CreateRequest
 		metadata RequestMetadata
 	}{
 		{
 			name: "missing idempotency key",
 			request: CreateRequest{
-				AccountID:   "acct_123",
-				MerchantID:  "merchant_123",
+				AccountID: "acct_123",
+				MerchantID: "merchant_123",
 				AmountCents: 100,
-				Currency:    "USD",
+				Currency: "USD",
 			},
 			metadata: RequestMetadata{CorrelationID: "trace_123"},
 		},
 		{
 			name: "invalid amount",
 			request: CreateRequest{
-				AccountID:   "acct_123",
-				MerchantID:  "merchant_123",
+				AccountID: "acct_123",
+				MerchantID: "merchant_123",
 				AmountCents: 0,
-				Currency:    "USD",
+				Currency: "USD",
 			},
 			metadata: RequestMetadata{IdempotencyKey: "idem_123", CorrelationID: "trace_123"},
 		},
 		{
 			name: "invalid currency",
 			request: CreateRequest{
-				AccountID:   "acct_123",
-				MerchantID:  "merchant_123",
+				AccountID: "acct_123",
+				MerchantID: "merchant_123",
 				AmountCents: 100,
-				Currency:    "US1",
+				Currency: "US1",
 			},
 			metadata: RequestMetadata{IdempotencyKey: "idem_123", CorrelationID: "trace_123"},
 		},
 		{
 			name: "reserved settlement account",
 			request: CreateRequest{
-				AccountID:   "external-settlement",
-				MerchantID:  "merchant_123",
+				AccountID: "external-settlement",
+				MerchantID: "merchant_123",
 				AmountCents: 100,
-				Currency:    "USD",
+				Currency: "USD",
 			},
 			metadata: RequestMetadata{IdempotencyKey: "idem_123", CorrelationID: "trace_123"},
 		},
@@ -186,7 +183,7 @@ func TestServiceValidatesTrustedInput(t *testing.T) {
 
 type concurrentIdempotencyStore struct {
 	existing IdempotencyRecord
-	lookups  int
+	lookups int
 }
 
 func (s *concurrentIdempotencyStore) FindIdempotency(context.Context, string) (IdempotencyRecord, bool, error) {

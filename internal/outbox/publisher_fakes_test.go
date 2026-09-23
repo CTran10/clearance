@@ -9,7 +9,7 @@ import (
 )
 
 type MemoryStore struct {
-	mu     sync.Mutex
+	mu sync.Mutex
 	events []domain.OutboxEvent
 }
 
@@ -94,7 +94,7 @@ func (s *MemoryStore) Attempts(eventID string) int {
 }
 
 type RecordingBroker struct {
-	mu     sync.Mutex
+	mu sync.Mutex
 	events []domain.OutboxEvent
 }
 

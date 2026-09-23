@@ -44,7 +44,7 @@ func (s *Store) PruneProcessedEvents(
 	if _, err := dbtx.Exec(ctx, `select pg_advisory_xact_lock(hashtext('processed-event-prune'))`); err != nil {
 		return 0, fmt.Errorf("lock processed-event prune: %w", err)
 	}
-	rows, err := dbtx.Query(
+	tag, err := dbtx.Exec(
 		ctx,
 		`with candidates as (
 		    select processed.consumer_name, processed.event_id
@@ -62,28 +62,13 @@ func (s *Store) PruneProcessedEvents(
 		delete from processed_events processed
 		 using candidates
 		 where processed.consumer_name = candidates.consumer_name
-		   and processed.event_id = candidates.event_id
-		returning processed.event_id`,
+		   and processed.event_id = candidates.event_id`,
 		cutoff,
 		batchSize,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("delete processed-event batch: %w", err)
 	}
-	var deleted int64
-	for rows.Next() {
-		var ignored string
-		if err := rows.Scan(&ignored); err != nil {
-			rows.Close()
-			return 0, fmt.Errorf("scan pruned processed event: %w", err)
-		}
-		deleted++
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return 0, fmt.Errorf("iterate pruned processed events: %w", err)
-	}
-	rows.Close()
 	if _, err := dbtx.Exec(
 		ctx,
 		`insert into operator_actions (id, action_type, target_id, reason)
@@ -97,7 +82,7 @@ func (s *Store) PruneProcessedEvents(
 	if err := dbtx.Commit(ctx); err != nil {
 		return 0, fmt.Errorf("commit processed-event prune: %w", err)
 	}
-	return deleted, nil
+	return tag.RowsAffected(), nil
 }
 
 const processedPruneCountSQL = `

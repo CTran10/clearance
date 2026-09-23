@@ -34,13 +34,13 @@ func run(ctx context.Context, args []string) error {
 	}
 	defer store.Close()
 	broker := kafkabus.NewPublisher(appenv.CSV("KAFKA_BROKERS", []string{"redpanda:9092"}))
-	defer func() { _ = broker.Close() }()
+	defer broker.Close()
 	replayWindow := appenv.DurationSeconds("REPLAY_WINDOW_SECONDS", 14*24*time.Hour)
 	operationsService := operations.NewService(store, broker, operations.Config{ReplayWindow: replayWindow})
 	maintenanceService, err := maintenance.NewProcessedEventsService(store, maintenance.Config{
-		Retention:    appenv.DurationSeconds("PROCESSED_EVENT_RETENTION_SECONDS", 30*24*time.Hour),
+		Retention: appenv.DurationSeconds("PROCESSED_EVENT_RETENTION_SECONDS", 30*24*time.Hour),
 		ReplayWindow: replayWindow,
-		BatchSize:    appenv.Int("PROCESSED_EVENT_PRUNE_BATCH_SIZE", 1_000),
+		BatchSize: appenv.Int("PROCESSED_EVENT_PRUNE_BATCH_SIZE", 1_000),
 	})
 	if err != nil {
 		return err

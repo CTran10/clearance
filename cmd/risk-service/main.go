@@ -38,21 +38,17 @@ func main() {
 
 	brokers := appenv.CSV("KAFKA_BROKERS", []string{"redpanda:9092"})
 	reader := kafkabus.NewReader(brokers, kafkabus.TopicTransactionCreated, "risk-service")
-	defer func() {
-		_ = reader.Close()
-	}()
+	defer reader.Close()
 	publisher := kafkabus.NewPublisher(brokers)
-	defer func() {
-		_ = publisher.Close()
-	}()
+	defer publisher.Close()
 	maxAttempts := appenv.Int("CONSUMER_MAX_ATTEMPTS", 3)
 	deadLetterer := deadletter.NewRecorder(risk.ConsumerName, store, publisher)
 	health.Start(ctx, ":"+appenv.String("HEALTH_PORT", "8082"), metricsEnabled)
 
 	slog.Info("risk service started")
 	consumer.RunLoop(ctx, reader, deadLetterer, consumer.Config{
-		Name:           risk.ConsumerName,
-		MaxAttempts:    maxAttempts,
+		Name: risk.ConsumerName,
+		MaxAttempts: maxAttempts,
 		RetryBaseDelay: 100 * time.Millisecond,
 	}, func(ctx context.Context, message kafka.Message) error {
 		eventID, err := kafkabus.EventID(message)

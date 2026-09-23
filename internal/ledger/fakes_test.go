@@ -12,19 +12,19 @@ import (
 )
 
 type MemoryStore struct {
-	mu           sync.Mutex
-	entries      []domain.LedgerEntry
-	balances     map[string]int64
+	mu sync.Mutex
+	entries []domain.LedgerEntry
+	balances map[string]int64
 	transactions map[string]domain.Transaction
-	processed    map[string]string
-	outbox       []domain.OutboxEvent
+	processed map[string]string
+	outbox []domain.OutboxEvent
 }
 
 func NewMemoryStore() *MemoryStore {
 	return &MemoryStore{
-		balances:     make(map[string]int64),
+		balances: make(map[string]int64),
 		transactions: make(map[string]domain.Transaction),
-		processed:    make(map[string]string),
+		processed: make(map[string]string),
 	}
 }
 

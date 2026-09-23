@@ -6,21 +6,21 @@ func TestEvaluateRiskUsesSimpleAmountRule(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name         string
-		amountCents  int64
-		wantLevel    RiskLevel
+		name string
+		amountCents int64
+		wantLevel RiskLevel
 		wantApproved bool
 	}{
 		{
-			name:         "amount at threshold is low risk",
-			amountCents:  50_000,
-			wantLevel:    RiskLow,
+			name: "amount at threshold is low risk",
+			amountCents: 50_000,
+			wantLevel: RiskLow,
 			wantApproved: true,
 		},
 		{
-			name:         "amount above threshold is high risk",
-			amountCents:  50_001,
-			wantLevel:    RiskHigh,
+			name: "amount above threshold is high risk",
+			amountCents: 50_001,
+			wantLevel: RiskHigh,
 			wantApproved: false,
 		},
 	}

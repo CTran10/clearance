@@ -21,8 +21,10 @@ func TestFundingEndpointUsesSeparateCredentialAndReturnsCreated(t *testing.T) {
 	handler := NewRouter(
 		transactionService(newTransactionMemoryStore()),
 		newMemoryRateLimiter(10),
-		Config{AuthValue: testAuthValue(), FundingAuthValue: "funding-secret"},
-		WithFundingService(funding.NewService(fundingStore, funding.Config{MaxAmountCents: 1_000_000})),
+		Config{
+			AuthValue: testAuthValue(), FundingAuthValue: "funding-secret",
+			FundingService: funding.NewService(fundingStore, funding.Config{MaxAmountCents: 1_000_000}),
+		},
 	)
 	body := []byte(`{"amount_cents":25000,"currency":"USD","funding_source":"demo-operator","external_reference":"transfer-123","operator_reason":"seed demo account"}`)
 
@@ -58,8 +60,10 @@ func TestTransactionReadEndpointsEnforceCredentialScopes(t *testing.T) {
 	handler := NewRouter(
 		transactionService(newTransactionMemoryStore()),
 		newMemoryRateLimiter(10),
-		Config{AuthValue: testAuthValue(), OperatorAuthValue: "operator-secret"},
-		WithQueryService(transaction.NewQueryService(queryStore)),
+		Config{
+			AuthValue: testAuthValue(), OperatorAuthValue: "operator-secret",
+			QueryService: transaction.NewQueryService(queryStore),
+		},
 	)
 
 	getRequest := httptest.NewRequest(http.MethodGet, "/transactions/txn_123", nil)

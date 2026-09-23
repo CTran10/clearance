@@ -1,8 +1,4 @@
-/**
- * Money is handled as integer cents end to end to avoid floating-point drift.
- * These helpers only format for display or translate the operator's dollar
- * input into the integer cents the API expects.
- */
+/** Amounts stay in integer cents; conversion is only for display. */
 
 export function formatAmountCents(amountCents: number, currency: string): string {
   const cents = Number(amountCents);

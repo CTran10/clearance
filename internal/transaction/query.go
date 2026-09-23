@@ -13,46 +13,46 @@ import (
 
 var (
 	ErrInvalidQuery = errors.New("invalid transaction query")
-	ErrNotFound     = errors.New("transaction not found")
+	ErrNotFound = errors.New("transaction not found")
 )
 
 type Detail struct {
-	ID                string                   `json:"transaction_id"`
-	Kind              domain.TransactionKind   `json:"kind"`
-	AccountID         string                   `json:"account_id"`
-	MerchantID        string                   `json:"merchant_id,omitempty"`
-	FundingSource     string                   `json:"funding_source,omitempty"`
-	ExternalReference string                   `json:"external_reference,omitempty"`
-	AmountCents       int64                    `json:"amount_cents"`
-	Currency          string                   `json:"currency"`
-	Status            domain.TransactionStatus `json:"status"`
-	RiskLevel         domain.RiskLevel         `json:"risk_level,omitempty"`
-	RiskReason        string                   `json:"risk_reason,omitempty"`
-	CorrelationID     string                   `json:"correlation_id"`
-	CreatedAt         time.Time                `json:"created_at"`
-	UpdatedAt         time.Time                `json:"updated_at"`
+	ID string `json:"transaction_id"`
+	Kind domain.TransactionKind `json:"kind"`
+	AccountID string `json:"account_id"`
+	MerchantID string `json:"merchant_id,omitempty"`
+	FundingSource string `json:"funding_source,omitempty"`
+	ExternalReference string `json:"external_reference,omitempty"`
+	AmountCents int64 `json:"amount_cents"`
+	Currency string `json:"currency"`
+	Status domain.TransactionStatus `json:"status"`
+	RiskLevel domain.RiskLevel `json:"risk_level,omitempty"`
+	RiskReason string `json:"risk_reason,omitempty"`
+	CorrelationID string `json:"correlation_id"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 type ListFilter struct {
 	AccountID string
-	Status    domain.TransactionStatus
-	Kind      domain.TransactionKind
-	Limit     int
-	Cursor    string
+	Status domain.TransactionStatus
+	Kind domain.TransactionKind
+	Limit int
+	Cursor string
 }
 
 type StoreListFilter struct {
-	AccountID       string
-	Status          domain.TransactionStatus
-	Kind            domain.TransactionKind
-	Limit           int
+	AccountID string
+	Status domain.TransactionStatus
+	Kind domain.TransactionKind
+	Limit int
 	BeforeCreatedAt time.Time
-	BeforeID        string
+	BeforeID string
 }
 
 type Page struct {
-	Items      []Detail `json:"items"`
-	NextCursor string   `json:"next_cursor,omitempty"`
+	Items []Detail `json:"items"`
+	NextCursor string `json:"next_cursor,omitempty"`
 }
 
 type QueryStore interface {
@@ -92,9 +92,9 @@ func (s *QueryService) List(ctx context.Context, filter ListFilter) (Page, error
 	}
 	storeFilter := StoreListFilter{
 		AccountID: filter.AccountID,
-		Status:    filter.Status,
-		Kind:      filter.Kind,
-		Limit:     filter.Limit,
+		Status: filter.Status,
+		Kind: filter.Kind,
+		Limit: filter.Limit,
 	}
 	if filter.Cursor != "" {
 		cursor, err := decodeCursor(filter.Cursor)
@@ -137,7 +137,7 @@ func validKind(kind domain.TransactionKind) bool {
 
 type cursor struct {
 	CreatedAt time.Time `json:"created_at"`
-	ID        string    `json:"id"`
+	ID string `json:"id"`
 }
 
 func encodeCursor(value cursor) string {

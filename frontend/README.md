@@ -1,7 +1,7 @@
 # Clearance Authorization Console
 
 An operator console for the Go-based Clearance authorization platform. It gives
-reviewers one browser surface for the backend MVP: health checks, authenticated
+reviewers one browser surface for the backend MVP: authenticated
 transaction submission, idempotency and correlation headers, a live risk
 preview, and a local receipt trail.
 
@@ -23,12 +23,11 @@ $500.00 risk threshold) is covered by unit tests.
 ```
 src/
 ├── lib/            # pure domain logic (validation, risk, formatting, api)
-├── state/          # useConsole reducer store
+├── state/          # useConsole state and requests
 ├── components/
 │   ├── ui/         # Button, Field, Panel, StatusPill (+ ui.css)
-│   ├── shell/      # TopBar, ConnectionBar, NoticeBar, MetricStrip
+│   ├── shell/      # NoticeBar, MetricStrip
 │   ├── submit/     # SubmitPanel + live RiskPreview
-│   ├── flow/       # event pipeline stepper
 │   └── receipts/   # receipt stream
 └── styles/         # tokens.css, global.css
 test/lib/           # Vitest suites mirroring the API contract
@@ -40,7 +39,7 @@ test/lib/           # Vitest suites mirroring the API contract
   `X-Correlation-ID` headers.
 - Preview the Risk Service decision live as you type the amount, with a
   cents → dollars echo.
-- Keep the bearer value in memory only; persist just the API base URL.
+- Read the local demo connection from frontend environment variables.
 - Show accepted PENDING responses as a local receipt trail (last 12).
 
 ## Develop
@@ -68,13 +67,16 @@ Start the platform from the repository root:
 docker compose up --build
 ```
 
-The default API base URL is `http://127.0.0.1:8080` (editable via the
-**Connection** panel). If the browser blocks API calls, allow the frontend
+The default API base URL is `http://127.0.0.1:8080`. In `frontend/.env.local`,
+set `VITE_TRANSACTION_API_AUTH_VALUE` to match the local platform's
+`TRANSACTION_API_AUTH_VALUE`. Set `VITE_API_BASE_URL` only if using a different
+API address, then restart Vite. The bearer is available only in development and
+omitted from production builds. It is visible in the local browser; use a local
+demo bearer only, never a production credential.
+
+If the browser blocks API calls, allow the frontend
 origin in the root `.env`:
 
 ```env
 CORS_ORIGINS=http://127.0.0.1:5173
 ```
-
-Set the bearer value in the **Connection** panel to match
-`TRANSACTION_API_AUTH_VALUE`.

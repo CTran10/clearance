@@ -16,29 +16,29 @@ import (
 type State string
 
 const (
-	StateOpen        State = "OPEN"
+	StateOpen State = "OPEN"
 	StateRepublished State = "REPUBLISHED"
-	StateDiscarded   State = "DISCARDED"
+	StateDiscarded State = "DISCARDED"
 )
 
 type Record struct {
-	ID               string         `json:"id"`
-	ConsumerName     string         `json:"consumer_name"`
-	EventID          string         `json:"event_id,omitempty"`
-	SourceTopic      string         `json:"source_topic"`
-	SourcePartition  int            `json:"source_partition"`
-	SourceOffset     int64          `json:"source_offset"`
-	Key              []byte         `json:"message_key"`
-	Headers          []kafka.Header `json:"headers"`
-	Payload          []byte         `json:"payload"`
-	PayloadSHA256    string         `json:"payload_sha256"`
-	ErrorClass       string         `json:"error_class"`
-	ErrorMessage     string         `json:"error_message"`
-	State            State          `json:"state"`
-	FirstFailedAt    time.Time      `json:"first_failed_at"`
-	LastFailedAt     time.Time      `json:"last_failed_at"`
-	KafkaPublishedAt time.Time      `json:"kafka_published_at,omitempty"`
-	ReplayCount      int            `json:"replay_count"`
+	ID string `json:"id"`
+	ConsumerName string `json:"consumer_name"`
+	EventID string `json:"event_id,omitempty"`
+	SourceTopic string `json:"source_topic"`
+	SourcePartition int `json:"source_partition"`
+	SourceOffset int64 `json:"source_offset"`
+	Key []byte `json:"message_key"`
+	Headers []kafka.Header `json:"headers"`
+	Payload []byte `json:"payload"`
+	PayloadSHA256 string `json:"payload_sha256"`
+	ErrorClass string `json:"error_class"`
+	ErrorMessage string `json:"error_message"`
+	State State `json:"state"`
+	FirstFailedAt time.Time `json:"first_failed_at"`
+	LastFailedAt time.Time `json:"last_failed_at"`
+	KafkaPublishedAt time.Time `json:"kafka_published_at,omitempty"`
+	ReplayCount int `json:"replay_count"`
 }
 
 type Store interface {
@@ -52,9 +52,9 @@ type Publisher interface {
 
 type Recorder struct {
 	consumerName string
-	store        Store
-	publisher    Publisher
-	now          func() time.Time
+	store Store
+	publisher Publisher
+	now func() time.Time
 }
 
 func NewRecorder(consumerName string, store Store, publisher Publisher) *Recorder {
@@ -90,21 +90,21 @@ func (r *Recorder) Move(ctx context.Context, message kafka.Message, cause error)
 func recordFromMessage(consumerName string, message kafka.Message, cause error, now time.Time) Record {
 	payloadHash := sha256.Sum256(message.Value)
 	return Record{
-		ID:              deterministicID(consumerName, message.Topic, message.Partition, message.Offset),
-		ConsumerName:    consumerName,
-		EventID:         headerValue(message.Headers, "event_id"),
-		SourceTopic:     message.Topic,
+		ID: deterministicID(consumerName, message.Topic, message.Partition, message.Offset),
+		ConsumerName: consumerName,
+		EventID: headerValue(message.Headers, "event_id"),
+		SourceTopic: message.Topic,
 		SourcePartition: message.Partition,
-		SourceOffset:    message.Offset,
-		Key:             append([]byte(nil), message.Key...),
-		Headers:         cloneHeaders(message.Headers),
-		Payload:         append([]byte(nil), message.Value...),
-		PayloadSHA256:   hex.EncodeToString(payloadHash[:]),
-		ErrorClass:      classify(cause),
-		ErrorMessage:    sanitize(cause),
-		State:           StateOpen,
-		FirstFailedAt:   now,
-		LastFailedAt:    now,
+		SourceOffset: message.Offset,
+		Key: append([]byte(nil), message.Key...),
+		Headers: cloneHeaders(message.Headers),
+		Payload: append([]byte(nil), message.Value...),
+		PayloadSHA256: hex.EncodeToString(payloadHash[:]),
+		ErrorClass: classify(cause),
+		ErrorMessage: sanitize(cause),
+		State: StateOpen,
+		FirstFailedAt: now,
+		LastFailedAt: now,
 	}
 }
 

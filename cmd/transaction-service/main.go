@@ -40,34 +40,32 @@ func main() {
 		appenv.Int("RATE_LIMIT_MAX_REQUESTS", 60),
 		appenv.DurationSeconds("RATE_LIMIT_WINDOW_SECONDS", time.Minute),
 	)
-	defer func() {
-		_ = limiter.Close()
-	}()
+	defer limiter.Close()
 
 	transactionService := transaction.NewService(store)
 	handler := httpapi.NewRouter(
 		transactionService,
 		limiter,
 		httpapi.Config{
-			AuthValue:         appenv.Must("TRANSACTION_API_AUTH_VALUE"),
-			FundingAuthValue:  appenv.Must("FUNDING_API_AUTH_VALUE"),
+			QueryService: transaction.NewQueryService(store),
+			FundingService: funding.NewService(store, funding.Config{
+				MaxAmountCents: int64(appenv.Int("FUNDING_MAX_AMOUNT_CENTS", 100_000_000)),
+			}),
+			AuthValue: appenv.Must("TRANSACTION_API_AUTH_VALUE"),
+			FundingAuthValue: appenv.Must("FUNDING_API_AUTH_VALUE"),
 			OperatorAuthValue: appenv.Must("OPERATOR_API_AUTH_VALUE"),
-			AllowedOrigins:    appenv.CSV("CORS_ORIGINS", nil),
+			AllowedOrigins: appenv.CSV("CORS_ORIGINS", nil),
 			TrustForwardedFor: appenv.Bool("TRUST_X_FORWARDED_FOR", false),
-			MetricsEnabled:    metricsEnabled,
+			MetricsEnabled: metricsEnabled,
 		},
-		httpapi.WithQueryService(transaction.NewQueryService(store)),
-		httpapi.WithFundingService(funding.NewService(store, funding.Config{
-			MaxAmountCents: int64(appenv.Int("FUNDING_MAX_AMOUNT_CENTS", 100_000_000)),
-		})),
 	)
 	server := &http.Server{
-		Addr:              ":" + appenv.String("PORT", "8080"),
-		Handler:           handler,
+		Addr: ":" + appenv.String("PORT", "8080"),
+		Handler: handler,
 		ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout:       10 * time.Second,
-		WriteTimeout:      10 * time.Second,
-		IdleTimeout:       60 * time.Second,
+		ReadTimeout: 10 * time.Second,
+		WriteTimeout: 10 * time.Second,
+		IdleTimeout: 60 * time.Second,
 	}
 
 	go func() {

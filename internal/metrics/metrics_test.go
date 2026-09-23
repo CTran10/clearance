@@ -74,7 +74,7 @@ func TestDefaultRegistryWrappersAndSampler(t *testing.T) {
 
 type snapshotProvider struct {
 	snapshot OperationalSnapshot
-	calls    atomic.Int32
+	calls atomic.Int32
 }
 
 func (p *snapshotProvider) OperationalMetrics(context.Context) (OperationalSnapshot, error) {
