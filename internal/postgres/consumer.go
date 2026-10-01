@@ -79,27 +79,17 @@ func claimProcessedEvent(
 	if tag.RowsAffected() == 1 {
 		return true, nil
 	}
-	if _, err := dbtx.Exec(
-		ctx,
-		`update processed_events
-		    set last_seen_at = now()
-		  where consumer_name = $1 and event_id = $2`,
-		delivery.ConsumerName,
-		delivery.EventID,
-	); err != nil {
-		return false, fmt.Errorf("refresh processed event: %w", err)
-	}
-
 	var existingHash string
 	if err := dbtx.QueryRow(
 		ctx,
-		`select payload_sha256
-		   from processed_events
-		  where consumer_name = $1 and event_id = $2`,
+		`update processed_events
+		    set last_seen_at = now()
+		  where consumer_name = $1 and event_id = $2
+		  returning payload_sha256`,
 		delivery.ConsumerName,
 		delivery.EventID,
 	).Scan(&existingHash); err != nil {
-		return false, fmt.Errorf("load processed event: %w", err)
+		return false, fmt.Errorf("refresh processed event: %w", err)
 	}
 	if existingHash != payloadHash {
 		return false, domain.ErrEventIdentityConflict

@@ -165,35 +165,18 @@ func insertLedgerEntries(ctx context.Context, dbtx pgx.Tx, transaction domain.Tr
 	// is two rows that sum to zero: minus X from the user, plus X into "clearing". if you add up every ledger entry
 	// ever and it doesn't total 0, money got invented or destroyed and something is very wrong. accountants have been
 	// doing this for ~500 years and i was today years old when i learned why. it makes the books auditable + self-checking
-	entries := []domain.LedgerEntry{
-		{
-			ID: domain.NewID("le"),
-			TransactionID: transaction.ID,
-			AccountID: transaction.AccountID,
-			AmountCents: -transaction.AmountCents, // debit the user
-			Currency: transaction.Currency,
-		},
-		{
-			ID: domain.NewID("le"),
-			TransactionID: transaction.ID,
-			AccountID: "clearing",
-			AmountCents: transaction.AmountCents, // credit clearing — equal + opposite, nets to 0
-			Currency: transaction.Currency,
-		},
-	}
-	for _, entry := range entries {
-		if _, err := dbtx.Exec(
-			ctx,
-			`insert into ledger_entries (id, transaction_id, account_id, amount_cents, currency)
-			 values ($1, $2, $3, $4, $5)`,
-			entry.ID,
-			entry.TransactionID,
-			entry.AccountID,
-			entry.AmountCents,
-			entry.Currency,
-		); err != nil {
-			return fmt.Errorf("insert ledger entry: %w", err)
-		}
+	if _, err := dbtx.Exec(
+		ctx,
+		`insert into ledger_entries (id, transaction_id, account_id, amount_cents, currency)
+		 values ($1, $3, $4, -$5::bigint, $6), ($2, $3, 'clearing', $5, $6)`,
+		domain.NewID("le"),
+		domain.NewID("le"),
+		transaction.ID,
+		transaction.AccountID,
+		transaction.AmountCents,
+		transaction.Currency,
+	); err != nil {
+		return fmt.Errorf("insert ledger entries: %w", err)
 	}
 	return nil
 }

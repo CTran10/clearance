@@ -72,7 +72,7 @@ func (r *Router) createTransaction(response http.ResponseWriter, request *http.R
 }
 
 func (r *Router) getTransaction(response http.ResponseWriter, request *http.Request, transactionID string) {
-	if r.queries == nil {
+	if r.config.QueryService == nil {
 		writeError(response, http.StatusNotFound, "not found")
 		return
 	}
@@ -84,7 +84,7 @@ func (r *Router) getTransaction(response http.ResponseWriter, request *http.Requ
 	if !r.allowRequest(response, request) {
 		return
 	}
-	detail, err := r.queries.Get(request.Context(), transactionID)
+	detail, err := r.config.QueryService.Get(request.Context(), transactionID)
 	if err != nil {
 		switch {
 		case errors.Is(err, transaction.ErrInvalidQuery):
@@ -100,7 +100,7 @@ func (r *Router) getTransaction(response http.ResponseWriter, request *http.Requ
 }
 
 func (r *Router) listTransactions(response http.ResponseWriter, request *http.Request) {
-	if r.queries == nil {
+	if r.config.QueryService == nil {
 		writeError(response, http.StatusNotFound, "not found")
 		return
 	}
@@ -120,7 +120,7 @@ func (r *Router) listTransactions(response http.ResponseWriter, request *http.Re
 		}
 		limit = parsed
 	}
-	page, err := r.queries.List(request.Context(), transaction.ListFilter{
+	page, err := r.config.QueryService.List(request.Context(), transaction.ListFilter{
 		AccountID: request.URL.Query().Get("account_id"),
 		Status: domain.TransactionStatus(request.URL.Query().Get("status")),
 		Kind: domain.TransactionKind(request.URL.Query().Get("kind")),
@@ -139,9 +139,6 @@ func (r *Router) listTransactions(response http.ResponseWriter, request *http.Re
 }
 
 func (r *Router) writeServiceError(response http.ResponseWriter, err error) {
-	// one place to turn internal errors into http status codes. errors.Is "unwraps" the chain to find a sentinel
-	// even if it got wrapped 3 layers deep with %w — that's why i wrapped instead of stringifying earlier.
-	// the default case is the safety net: anything i didn't explicitly map becomes a generic 500, never a leak
 	switch {
 	case errors.Is(err, transaction.ErrInvalidRequest):
 		writeError(response, http.StatusBadRequest, "invalid request")

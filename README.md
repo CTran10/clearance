@@ -102,7 +102,10 @@ Open:
 http://127.0.0.1:5173
 ```
 
-Configure the same bearer value from `.env` and submit transactions against:
+Set `VITE_TRANSACTION_API_AUTH_VALUE` in `frontend/.env.local` to match the
+local demo's `TRANSACTION_API_AUTH_VALUE`, then restart Vite. The bearer is
+browser-visible in development and omitted from production builds; use a local
+demo bearer only. Transactions default to:
 
 ```text
 http://127.0.0.1:8080

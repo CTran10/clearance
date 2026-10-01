@@ -1,8 +1,7 @@
 import { useState } from "react";
 import type { FormEvent } from "react";
 
-import { CURRENCIES, DEMO_ACCOUNTS, DEMO_MERCHANTS } from "../../lib/constants.ts";
-import { centsToDollarString } from "../../lib/format.ts";
+import { CURRENCIES, DEMO_ACCOUNTS, DEMO_MERCHANTS, RISK_THRESHOLD_CENTS } from "../../lib/constants.ts";
 import type { SubmitFields } from "../../state/useConsole.ts";
 import { Button } from "../ui/Button.tsx";
 import { Panel } from "../ui/Panel.tsx";
@@ -14,7 +13,7 @@ interface SubmitPanelProps {
   idempotencyKey: string;
   correlationId: string;
   submitting: boolean;
-  onSubmit: (fields: SubmitFields) => Promise<boolean>;
+  onSubmit: (fields: SubmitFields) => Promise<void>;
   onRegenerateKeys: () => void;
 }
 
@@ -43,12 +42,9 @@ export function SubmitPanel({
     });
   }
 
-  const dollars = centsToDollarString(amount);
-
   return (
     <Panel
       title="Submit transaction"
-      index="01"
       actions={<span className="panel__meta">POST /transactions</span>}
     >
       <form className="submit" onSubmit={handleSubmit}>
@@ -74,10 +70,11 @@ export function SubmitPanel({
               value={amount}
               onChange={(event) => setAmount(event.target.value)}
               mono
-              hint={
-                dollars
-                  ? `= $${dollars}. Above $500.00 (50001) previews HIGH risk.`
-                  : "Whole number of cents. Above 50001 previews HIGH risk."
+              aria-describedby="amount-hint"
+              aside={
+                <small id="amount-hint" className="field__hint">
+                  HIGH risk above {RISK_THRESHOLD_CENTS}
+                </small>
               }
             />
             <SelectField

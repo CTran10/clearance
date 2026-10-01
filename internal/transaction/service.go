@@ -63,6 +63,7 @@ func NewService(store Store) *Service {
 }
 
 func (s *Service) Create(ctx context.Context, request CreateRequest, metadata RequestMetadata) (CreateResponse, error) {
+	metadata.IdempotencyKey = strings.TrimSpace(metadata.IdempotencyKey)
 	normalized, err := validate(request, metadata)
 	if err != nil {
 		return CreateResponse{}, err
@@ -133,7 +134,6 @@ func validate(request CreateRequest, metadata RequestMetadata) (CreateRequest, e
 	request.Currency = strings.ToUpper(strings.TrimSpace(request.Currency))
 	request.AccountID = strings.TrimSpace(request.AccountID)
 	request.MerchantID = strings.TrimSpace(request.MerchantID)
-	metadata.IdempotencyKey = strings.TrimSpace(metadata.IdempotencyKey)
 
 	if !safeTokenPattern.MatchString(metadata.IdempotencyKey) ||
 		!safeTokenPattern.MatchString(request.AccountID) ||

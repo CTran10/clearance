@@ -26,9 +26,6 @@ async function request<T>(baseUrl: string, path: string, options: RequestInit = 
   try {
     response = await fetch(`${baseUrl}${path}`, options);
   } catch (cause) {
-    // THE fetch footgun: fetch only rejects/throws on actual network failure (server down, DNS, CORS).
-    // a 404 or 500 does NOT throw — it resolves happily with response.ok === false. spent forever wondering why
-    // my try/catch never caught a 500. so: catch here = "couldn't even reach the server", the .ok check below = "server said no"
     const reason = cause instanceof Error ? cause.message : "network error";
     throw new Error(`Could not reach ${baseUrl}${path} (${reason}). Is the platform running?`);
   }
@@ -36,10 +33,6 @@ async function request<T>(baseUrl: string, path: string, options: RequestInit = 
     throw new Error(await parseApiError(response));
   }
   return response.json() as Promise<T>;
-}
-
-export async function checkHealth(baseUrl: string): Promise<void> {
-  await request<{ status: string }>(baseUrl, "/healthz", { method: "GET" });
 }
 
 export interface SubmitArgs {

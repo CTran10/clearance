@@ -34,7 +34,7 @@ func run(ctx context.Context, args []string) error {
 	}
 	defer store.Close()
 	broker := kafkabus.NewPublisher(appenv.CSV("KAFKA_BROKERS", []string{"redpanda:9092"}))
-	defer func() { _ = broker.Close() }()
+	defer broker.Close()
 	replayWindow := appenv.DurationSeconds("REPLAY_WINDOW_SECONDS", 14*24*time.Hour)
 	operationsService := operations.NewService(store, broker, operations.Config{ReplayWindow: replayWindow})
 	maintenanceService, err := maintenance.NewProcessedEventsService(store, maintenance.Config{

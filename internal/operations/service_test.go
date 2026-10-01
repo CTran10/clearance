@@ -84,6 +84,7 @@ func TestServiceRejectsInvalidReplayAndRecordsPublishFailure(t *testing.T) {
 		FirstFailedAt: now.Add(-time.Hour),
 	}}
 	broker := &recordingBroker{err: errors.New("broker unavailable")}
+	store.finishErr = errors.New("audit unavailable")
 	service := NewService(store, broker, Config{Now: func() time.Time { return now }})
 
 	if _, err := service.ReplayDeadLetter(context.Background(), "dlq_123", ""); !errors.Is(err, ErrInvalidReason) {
@@ -92,8 +93,8 @@ func TestServiceRejectsInvalidReplayAndRecordsPublishFailure(t *testing.T) {
 	if _, err := service.ReplayDeadLetter(context.Background(), "dlq_123", strings.Repeat("x", 257)); !errors.Is(err, ErrInvalidReason) {
 		t.Fatalf("oversized reason error = %v, want ErrInvalidReason", err)
 	}
-	if _, err := service.ReplayDeadLetter(context.Background(), "dlq_123", "broker recovered"); err == nil {
-		t.Fatal("broker failure should be returned")
+	if _, err := service.ReplayDeadLetter(context.Background(), "dlq_123", "broker recovered"); !errors.Is(err, broker.err) || !errors.Is(err, store.finishErr) {
+		t.Fatalf("replay error = %v, want both broker and audit failures", err)
 	}
 	if store.replayResult != ReplayFailed || store.replayError == "" {
 		t.Fatalf("failed replay audit = %q/%q", store.replayResult, store.replayError)
@@ -116,6 +117,7 @@ type operationStore struct {
 	replayReason string
 	replayResult ReplayResult
 	replayError string
+	finishErr error
 	outboxStatus domain.OutboxStatus
 }
 
@@ -138,7 +140,7 @@ func (s *operationStore) FinishDeadLetterReplay(_ context.Context, _, _ string, 
 	if result == ReplayPublished {
 		s.deadLetter.State = deadletter.StateRepublished
 	}
-	return nil
+	return s.finishErr
 }
 
 func (s *operationStore) GetOutboxStatus(context.Context, string) (domain.OutboxStatus, bool, error) {

@@ -117,10 +117,10 @@ func TestTopicForMapsEveryBusinessEvent(t *testing.T) {
 	}
 }
 
-func TestTopicWritersReuseConfiguredWriter(t *testing.T) {
+func TestPublisherReusesConfiguredWriter(t *testing.T) {
 	t.Parallel()
 
-	writers := newTopicWriters([]string{"127.0.0.1:1"})
+	writers := NewPublisher([]string{"127.0.0.1:1"})
 	first := writers.writer(TopicTransactionCreated)
 	second := writers.writer(TopicTransactionCreated)
 	if first != second {

@@ -40,6 +40,27 @@ func (l *memoryRateLimiter) Allow(context.Context, string) (bool, error) {
 	return true, nil
 }
 
+func TestRateLimitKeyUsesOnlyFirstForwardedAddress(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		header string
+		want string
+	}{
+		{"", "192.0.2.1"},
+		{"invalid, 198.51.100.1", "192.0.2.1"},
+		{", 198.51.100.1", "192.0.2.1"},
+		{" 198.51.100.1, 203.0.113.1", "198.51.100.1"},
+		{"2001:db8::1, 203.0.113.1", "2001:db8::1"},
+	} {
+		request := httptest.NewRequest(http.MethodPost, "/transactions", nil)
+		request.RemoteAddr = "192.0.2.1:1234"
+		request.Header.Set("X-Forwarded-For", test.header)
+		if got := rateLimitKey(request, true); got != test.want {
+			t.Errorf("forwarded %q: got %q, want %q", test.header, got, test.want)
+		}
+	}
+}
+
 func TestTransactionHandlerRequiresBearerToken(t *testing.T) {
 	t.Parallel()
 
@@ -136,10 +157,6 @@ func TestTransactionHandlerHidesInternalErrors(t *testing.T) {
 	if response.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want %d", response.Code, http.StatusInternalServerError)
 	}
-	// the failingStore i wired up errors with a fake "database password" string in its message ON PURPOSE.
-	// the actual assertion is: that string must NOT appear in the response body. classic leak — you catch an
-	// error and lazily do w.Write([]byte(err.Error())), and now your stack traces / db creds get shipped to the
-	// client. user gets a boring "internal error", the juicy details go to the logs only. testing the absence of a thing!
 	if bytes.Contains(response.Body.Bytes(), []byte("database password")) {
 		t.Fatal("response leaked internal error details")
 	}

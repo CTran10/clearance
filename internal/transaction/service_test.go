@@ -8,13 +8,8 @@ import (
 	"github.com/CTran10/clearance/internal/domain"
 )
 
-// writing this test BEFORE the code exists feels backwards but it's the contract i want the new Go service to honor.
-// the big new idea moving off the python monolith: the "transactional outbox". instead of saving the txn AND
-// firing an event to kafka separately (where the 2nd one can fail and you lose the event forever), you write the
-// event into a plain db table in the SAME transaction as the txn. either both land or neither does. a separate
-// publisher drains that table later. took me a few diagrams to believe it but it kills the "saved but never published" ghost
 func TestServiceCreatesPendingTransactionAndOutboxEvent(t *testing.T) {
-	t.Parallel() // go runs t.Parallel() tests concurrently — caught a shared-state bug in my store this way, 10/10 recommend
+	t.Parallel()
 
 	store := NewMemoryStore()
 	service := NewService(store)
@@ -73,7 +68,9 @@ func TestServiceReplaysSameIdempotencyKeyAndRejectsPayloadMismatch(t *testing.T)
 	if err != nil {
 		t.Fatalf("Create returned error: %v", err)
 	}
-	replayed, err := service.Create(context.Background(), request, metadata)
+	padded := metadata
+	padded.IdempotencyKey = " " + metadata.IdempotencyKey + " "
+	replayed, err := service.Create(context.Background(), request, padded)
 	if err != nil {
 		t.Fatalf("Create replay returned error: %v", err)
 	}

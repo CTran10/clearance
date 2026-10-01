@@ -5,7 +5,6 @@ import { StatusPill } from "../ui/StatusPill.tsx";
 
 interface ReceiptCardProps {
   receipt: Receipt;
-  highlight: boolean;
 }
 
 function Detail({ term, value, mono = false }: { term: string; value: string; mono?: boolean }) {
@@ -17,16 +16,16 @@ function Detail({ term, value, mono = false }: { term: string; value: string; mo
   );
 }
 
-export function ReceiptCard({ receipt, highlight }: ReceiptCardProps) {
+export function ReceiptCard({ receipt }: ReceiptCardProps) {
   return (
-    <article className={highlight ? "receipt receipt--new" : "receipt"}>
+    <article className="receipt">
       <header className="receipt__head">
         <div className="receipt__id">
           <span className="receipt__idlabel">Transaction</span>
           <span className="receipt__idvalue mono">{receipt.transactionId || "pending"}</span>
         </div>
         <div className="receipt__pills">
-          <StatusPill tone={statusTone(receipt.status)} label={receipt.status} live={receipt.status === "PENDING"} />
+          <StatusPill tone={statusTone(receipt.status)} label={receipt.status} />
           <StatusPill tone={riskTone(receipt.previewRisk)} label={`${receipt.previewRisk} risk`} />
         </div>
       </header>

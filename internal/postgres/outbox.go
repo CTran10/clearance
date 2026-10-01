@@ -12,7 +12,8 @@ import (
 func (s *Store) NextPending(ctx context.Context) (domain.OutboxEvent, bool, error) {
 	// UPDATE TO PAST-ME: remember when i said i knew the "for update skip locked" spell but didn't need it yet? we need it.
 	// this now does the real thing: SKIP LOCKED lets multiple publishers each grab a DIFFERENT pending row instead of
-	// fighting over the same one (no double-publish). plus it flips the row to PROCESSING so a crashed worker doesn't
+	// fighting over the same claim. a crash after publishing can still cause redelivery, so consumers must deduplicate.
+	// plus it flips the row to PROCESSING so a crashed worker doesn't
 	// strand events forever — anything stuck PROCESSING for 5 min gets reclaimed. the CTE-then-update is one atomic
 	// "claim a job" move. genuinely proud of this one, it took three rewrites to get right
 	var event domain.OutboxEvent

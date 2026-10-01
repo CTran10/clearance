@@ -9,7 +9,7 @@ import (
 )
 
 func (r *Router) createDeposit(response http.ResponseWriter, request *http.Request, accountID string) {
-	if r.fundingService == nil {
+	if r.config.FundingService == nil {
 		writeError(response, http.StatusNotFound, "not found")
 		return
 	}
@@ -34,7 +34,7 @@ func (r *Router) createDeposit(response http.ResponseWriter, request *http.Reque
 		writeError(response, http.StatusBadRequest, "invalid request")
 		return
 	}
-	result, err := r.fundingService.Deposit(
+	result, err := r.config.FundingService.Deposit(
 		request.Context(),
 		funding.DepositRequest{
 			AccountID: accountID, AmountCents: payload.AmountCents, Currency: payload.Currency,

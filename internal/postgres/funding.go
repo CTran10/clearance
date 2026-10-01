@@ -77,29 +77,18 @@ func (s *Store) CreateDeposit(
 		return funding.DepositResponse{}, fmt.Errorf("insert deposit transaction: %w", err)
 	}
 
-	entries := []domain.LedgerEntry{
-		{
-			ID: domain.NewID("le"), TransactionID: transaction.ID, AccountID: transaction.AccountID,
-			AmountCents: transaction.AmountCents, Currency: transaction.Currency,
-		},
-		{
-			ID: domain.NewID("le"), TransactionID: transaction.ID, AccountID: "external-settlement",
-			AmountCents: -transaction.AmountCents, Currency: transaction.Currency,
-		},
-	}
-	for _, entry := range entries {
-		if _, err := dbtx.Exec(
-			ctx,
-			`insert into ledger_entries (id, transaction_id, account_id, amount_cents, currency)
-			 values ($1, $2, $3, $4, $5)`,
-			entry.ID,
-			entry.TransactionID,
-			entry.AccountID,
-			entry.AmountCents,
-			entry.Currency,
-		); err != nil {
-			return funding.DepositResponse{}, fmt.Errorf("insert deposit ledger entry: %w", err)
-		}
+	if _, err := dbtx.Exec(
+		ctx,
+		`insert into ledger_entries (id, transaction_id, account_id, amount_cents, currency)
+		 values ($1, $3, $4, $5, $6), ($2, $3, 'external-settlement', -$5::bigint, $6)`,
+		domain.NewID("le"),
+		domain.NewID("le"),
+		transaction.ID,
+		transaction.AccountID,
+		transaction.AmountCents,
+		transaction.Currency,
+	); err != nil {
+		return funding.DepositResponse{}, fmt.Errorf("insert deposit ledger entries: %w", err)
 	}
 
 	var balance int64

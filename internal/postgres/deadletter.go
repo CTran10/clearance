@@ -13,6 +13,11 @@ import (
 	"github.com/segmentio/kafka-go"
 )
 
+const deadLetterColumns = `
+ id, consumer_name, event_id, source_topic, source_partition, source_offset,
+ message_key, headers, payload, payload_sha256, error_class, error_message,
+ state, first_failed_at, last_failed_at, kafka_published_at, replay_count`
+
 type storedHeader struct {
 	Key string `json:"key"`
 	Value []byte `json:"value"`
@@ -23,25 +28,19 @@ func (s *Store) UpsertDeadLetter(ctx context.Context, record deadletter.Record) 
 	if err != nil {
 		return deadletter.Record{}, fmt.Errorf("encode dead letter headers: %w", err)
 	}
-	var stored deadletter.Record
-	var storedHeaders []byte
-	var eventID *string
-	var kafkaPublishedAt *time.Time
-	err = s.pool.QueryRow(
+	stored, err := scanDeadLetter(s.pool.QueryRow(
 		ctx,
 		`insert into dead_letter_messages
-			(id, consumer_name, event_id, source_topic, source_partition, source_offset,
-			 message_key, headers, payload, payload_sha256, error_class, error_message,
-			 state, first_failed_at, last_failed_at)
-		 values ($1, $2, nullif($3, ''), $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $14)
-		 on conflict (consumer_name, source_topic, source_partition, source_offset)
-		 do update set last_failed_at = excluded.last_failed_at,
-		               error_class = excluded.error_class,
-		               error_message = excluded.error_message,
-		               version = dead_letter_messages.version + 1
-		 returning id, consumer_name, event_id, source_topic, source_partition, source_offset,
-		           message_key, headers, payload, payload_sha256, error_class, error_message,
-		           state, first_failed_at, last_failed_at, kafka_published_at, replay_count`,
+    (id, consumer_name, event_id, source_topic, source_partition, source_offset,
+     message_key, headers, payload, payload_sha256, error_class, error_message,
+     state, first_failed_at, last_failed_at)
+   values ($1, $2, nullif($3, ''), $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $14)
+   on conflict (consumer_name, source_topic, source_partition, source_offset)
+   do update set last_failed_at = excluded.last_failed_at,
+                 error_class = excluded.error_class,
+                 error_message = excluded.error_message,
+                 version = dead_letter_messages.version + 1
+   returning `+deadLetterColumns,
 		record.ID,
 		record.ConsumerName,
 		record.EventID,
@@ -56,37 +55,9 @@ func (s *Store) UpsertDeadLetter(ctx context.Context, record deadletter.Record) 
 		record.ErrorMessage,
 		record.State,
 		record.FirstFailedAt,
-	).Scan(
-		&stored.ID,
-		&stored.ConsumerName,
-		&eventID,
-		&stored.SourceTopic,
-		&stored.SourcePartition,
-		&stored.SourceOffset,
-		&stored.Key,
-		&storedHeaders,
-		&stored.Payload,
-		&stored.PayloadSHA256,
-		&stored.ErrorClass,
-		&stored.ErrorMessage,
-		&stored.State,
-		&stored.FirstFailedAt,
-		&stored.LastFailedAt,
-		&kafkaPublishedAt,
-		&stored.ReplayCount,
-	)
+	))
 	if err != nil {
 		return deadletter.Record{}, fmt.Errorf("upsert dead letter: %w", err)
-	}
-	if eventID != nil {
-		stored.EventID = *eventID
-	}
-	if kafkaPublishedAt != nil {
-		stored.KafkaPublishedAt = *kafkaPublishedAt
-	}
-	stored.Headers, err = decodeHeaders(storedHeaders)
-	if err != nil {
-		return deadletter.Record{}, fmt.Errorf("decode stored dead letter headers: %w", err)
 	}
 	return stored, nil
 }
@@ -110,52 +81,16 @@ func (s *Store) MarkDeadLetterPublished(ctx context.Context, id string, publishe
 }
 
 func (s *Store) GetDeadLetter(ctx context.Context, id string) (deadletter.Record, bool, error) {
-	var record deadletter.Record
-	var headersJSON []byte
-	var eventID *string
-	var kafkaPublishedAt *time.Time
-	err := s.pool.QueryRow(
+	record, err := scanDeadLetter(s.pool.QueryRow(
 		ctx,
-		`select id, consumer_name, event_id, source_topic, source_partition, source_offset,
-		        message_key, headers, payload, payload_sha256, error_class, error_message,
-		        state, first_failed_at, last_failed_at, kafka_published_at, replay_count
-		   from dead_letter_messages
-		  where id = $1`,
+		`select `+deadLetterColumns+` from dead_letter_messages where id = $1`,
 		id,
-	).Scan(
-		&record.ID,
-		&record.ConsumerName,
-		&eventID,
-		&record.SourceTopic,
-		&record.SourcePartition,
-		&record.SourceOffset,
-		&record.Key,
-		&headersJSON,
-		&record.Payload,
-		&record.PayloadSHA256,
-		&record.ErrorClass,
-		&record.ErrorMessage,
-		&record.State,
-		&record.FirstFailedAt,
-		&record.LastFailedAt,
-		&kafkaPublishedAt,
-		&record.ReplayCount,
-	)
+	))
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return deadletter.Record{}, false, nil
 		}
 		return deadletter.Record{}, false, fmt.Errorf("get dead letter: %w", err)
-	}
-	if eventID != nil {
-		record.EventID = *eventID
-	}
-	if kafkaPublishedAt != nil {
-		record.KafkaPublishedAt = *kafkaPublishedAt
-	}
-	record.Headers, err = decodeHeaders(headersJSON)
-	if err != nil {
-		return deadletter.Record{}, false, fmt.Errorf("decode dead letter headers: %w", err)
 	}
 	return record, true, nil
 }
@@ -166,10 +101,10 @@ func (s *Store) ListDeadLetters(ctx context.Context, state deadletter.State, lim
 	}
 	rows, err := s.pool.Query(
 		ctx,
-		`select id from dead_letter_messages
-		  where ($1 = '' or state = $1)
-		  order by first_failed_at desc, id desc
-		  limit $2`,
+		`select `+deadLetterColumns+` from dead_letter_messages
+    where ($1 = '' or state = $1)
+    order by first_failed_at desc, id desc
+    limit $2`,
 		state,
 		limit,
 	)
@@ -177,26 +112,16 @@ func (s *Store) ListDeadLetters(ctx context.Context, state deadletter.State, lim
 		return nil, fmt.Errorf("list dead letters: %w", err)
 	}
 	defer rows.Close()
-	ids := make([]string, 0, limit)
+	items := make([]deadletter.Record, 0, limit)
 	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf("scan dead letter id: %w", err)
+		item, err := scanDeadLetter(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan dead letter: %w", err)
 		}
-		ids = append(ids, id)
+		items = append(items, item)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate dead letter ids: %w", err)
-	}
-	items := make([]deadletter.Record, 0, len(ids))
-	for _, id := range ids {
-		item, ok, err := s.GetDeadLetter(ctx, id)
-		if err != nil {
-			return nil, err
-		}
-		if ok {
-			items = append(items, item)
-		}
+		return nil, fmt.Errorf("iterate dead letters: %w", err)
 	}
 	return items, nil
 }
@@ -298,6 +223,46 @@ func (s *Store) FinishDeadLetterReplay(
 		return fmt.Errorf("commit finish dead letter replay: %w", err)
 	}
 	return nil
+}
+
+func scanDeadLetter(row pgx.Row) (deadletter.Record, error) {
+	var record deadletter.Record
+	var headersJSON []byte
+	var eventID *string
+	var kafkaPublishedAt *time.Time
+	if err := row.Scan(
+		&record.ID,
+		&record.ConsumerName,
+		&eventID,
+		&record.SourceTopic,
+		&record.SourcePartition,
+		&record.SourceOffset,
+		&record.Key,
+		&headersJSON,
+		&record.Payload,
+		&record.PayloadSHA256,
+		&record.ErrorClass,
+		&record.ErrorMessage,
+		&record.State,
+		&record.FirstFailedAt,
+		&record.LastFailedAt,
+		&kafkaPublishedAt,
+		&record.ReplayCount,
+	); err != nil {
+		return deadletter.Record{}, err
+	}
+	if eventID != nil {
+		record.EventID = *eventID
+	}
+	if kafkaPublishedAt != nil {
+		record.KafkaPublishedAt = *kafkaPublishedAt
+	}
+	headers, err := decodeHeaders(headersJSON)
+	if err != nil {
+		return deadletter.Record{}, fmt.Errorf("decode dead letter headers: %w", err)
+	}
+	record.Headers = headers
+	return record, nil
 }
 
 func encodeHeaders(headers []kafka.Header) ([]byte, error) {

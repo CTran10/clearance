@@ -11,20 +11,14 @@
   justify-content: space-between;
   gap: var(--space-4);
   padding: var(--space-4) var(--space-5);
-  border: 1px solid var(--tone-line, var(--line-strong));
+  border: 1px solid var(--line-strong);
   border-radius: var(--radius);
-  background:
-    linear-gradient(180deg, color-mix(in oklch, var(--tone-soft, var(--bg-2)) 55%, var(--bg-2)), var(--bg-2));
-  transition:
-    border-color var(--dur) var(--ease-out-expo),
-    background var(--dur) var(--ease-out-expo);
+  background: var(--bg-2);
 }
 .riskpreview--empty {
-  --tone-line: var(--line);
   flex-direction: column;
   align-items: flex-start;
   gap: var(--space-2);
-  background: var(--bg-2);
 }
 .riskpreview__eyebrow {
   font-size: var(--text-2xs);
@@ -52,12 +46,6 @@
   justify-items: end;
   gap: 4px;
   text-align: right;
-}
-.riskpreview__outcome {
-  font-size: var(--text-sm);
-  font-weight: 650;
-  color: var(--tone, var(--text));
-  text-transform: capitalize;
 }
 .riskpreview__reason {
   font-size: var(--text-xs);

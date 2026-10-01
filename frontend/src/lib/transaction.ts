@@ -23,10 +23,6 @@ export function buildTransactionHeaders(
  * uses DisallowUnknownFields, so the shape here must stay limited to these
  * four keys.
  */
-// real talk: "DisallowUnknownFields" on the Go side means if i send ONE extra key (even a harmless typo like
-// "amount_cent") the whole request gets rejected, not silently ignored. strict, kinda annoying, but it means
-// the frontend and backend can never quietly drift apart without something loudly breaking. so the return below
-// is deliberately exactly 4 keys, no more. adding a field here without adding it in Go = instant 400
 export function buildTransactionPayload(input: TransactionInput): TransactionPayload {
   const accountId = String(input.accountId || "").trim();
   const merchantId = String(input.merchantId || "").trim();

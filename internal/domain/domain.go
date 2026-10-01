@@ -4,7 +4,6 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"time"
 )
 
@@ -61,8 +60,6 @@ type RiskEvaluation struct {
 }
 
 func EvaluateRisk(amountCents int64) RiskEvaluation {
-	// 50_000 cents = $500.00. go lets you put _ in numbers purely so your eyeballs can find the comma — it's
-	// the same as 50000, the underscore is invisible to the compiler. (i kept reading it as 50k DOLLARS at first lol)
 	if amountCents > 50_000 {
 		return RiskEvaluation{
 			Level: RiskHigh,
@@ -158,14 +155,7 @@ type LedgerEntry struct {
 }
 
 func NewID(prefix string) string {
-	// "crypto/rand" not "math/rand"!! math/rand is predictable — seed it the same and you get the same "random"
-	// numbers, which for ids people might guess is a disaster. crypto/rand is the real unpredictable stuff.
-	// the import names are almost identical so this is an easy footgun. 16 random bytes = basically zero collision odds
 	var bytes [16]byte
-	if _, err := rand.Read(bytes[:]); err != nil {
-		// rand.Read basically never fails, but Go makes me handle the error anyway, so: if entropy somehow dies,
-		// fall back to a timestamp. ugly and technically guessable but better than crashing the whole service
-		return fmt.Sprintf("%s_%d", prefix, time.Now().UnixNano())
-	}
+	rand.Read(bytes[:])
 	return prefix + "_" + hex.EncodeToString(bytes[:])
 }

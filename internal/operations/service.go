@@ -100,7 +100,9 @@ func (s *Service) ReplayDeadLetter(ctx context.Context, id, reason string) (dead
 		Headers: cloneHeaders(record.Headers),
 	}
 	if err := s.broker.PublishMessage(ctx, record.SourceTopic, message); err != nil {
-		_ = s.store.FinishDeadLetterReplay(ctx, attemptID, record.ID, ReplayFailed, boundedError(err))
+		if finishErr := s.store.FinishDeadLetterReplay(ctx, attemptID, record.ID, ReplayFailed, boundedError(err)); finishErr != nil {
+			err = errors.Join(err, fmt.Errorf("record failed replay: %w", finishErr))
+		}
 		return deadletter.Record{}, fmt.Errorf("publish dead letter replay: %w", err)
 	}
 	if err := s.store.FinishDeadLetterReplay(ctx, attemptID, record.ID, ReplayPublished, ""); err != nil {

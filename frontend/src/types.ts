@@ -70,5 +70,3 @@ export interface ReceiptSummary {
   lowRisk: number;
   highRisk: number;
 }
-
-export type HealthState = "unknown" | "checking" | "ok" | "down";

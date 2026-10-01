@@ -16,6 +16,8 @@ import (
 const defaultMaxBodyBytes int64 = 1 << 20
 
 type Config struct {
+	QueryService *transaction.QueryService
+	FundingService *funding.Service
 	AuthValue string
 	FundingAuthValue string
 	OperatorAuthValue string
@@ -31,35 +33,15 @@ type RateLimiter interface {
 
 type Router struct {
 	service *transaction.Service
-	queries *transaction.QueryService
-	fundingService *funding.Service
 	limiter RateLimiter
 	config Config
 }
 
-type Option func(*Router)
-
-func WithQueryService(service *transaction.QueryService) Option {
-	return func(router *Router) {
-		router.queries = service
-	}
-}
-
-func WithFundingService(service *funding.Service) Option {
-	return func(router *Router) {
-		router.fundingService = service
-	}
-}
-
-func NewRouter(service *transaction.Service, limiter RateLimiter, config Config, options ...Option) http.Handler {
+func NewRouter(service *transaction.Service, limiter RateLimiter, config Config) http.Handler {
 	if config.MaxBodyBytes <= 0 {
 		config.MaxBodyBytes = defaultMaxBodyBytes
 	}
-	router := &Router{service: service, limiter: limiter, config: config}
-	for _, option := range options {
-		option(router)
-	}
-	return router
+	return &Router{service: service, limiter: limiter, config: config}
 }
 
 func (r *Router) serveHTTP(response http.ResponseWriter, request *http.Request) {
@@ -152,7 +134,8 @@ func authorized(header string, expected string) bool {
 	got := strings.TrimPrefix(header, "Bearer ")
 	// timing attacks again (hi, callback to the python dummy-hash thing). a normal got == expected bails on
 	// the FIRST wrong byte, so a token starting with the right char takes a hair longer to reject. measure enough
-	// requests and you can brute the token one byte at a time. ConstantTimeCompare always checks every byte. == 1 means match
+	// requests and you can brute the token one byte at a time. ConstantTimeCompare checks every byte for equal-length tokens;
+	// different lengths fail immediately. == 1 means match
 	return subtle.ConstantTimeCompare([]byte(got), []byte(expected)) == 1
 }
 
@@ -170,14 +153,12 @@ func rateLimitKey(request *http.Request, trustForwardedFor bool) string {
 }
 
 func firstForwardedFor(header string) string {
-	for _, part := range strings.Split(header, ",") {
-		addr, err := netip.ParseAddr(strings.TrimSpace(part))
-		if err == nil {
-			return addr.String()
-		}
+	first, _, _ := strings.Cut(header, ",")
+	addr, err := netip.ParseAddr(strings.TrimSpace(first))
+	if err != nil {
 		return ""
 	}
-	return ""
+	return addr.String()
 }
 
 func writeError(response http.ResponseWriter, status int, message string) {

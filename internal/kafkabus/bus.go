@@ -24,11 +24,13 @@ const (
 )
 
 type Publisher struct {
-	writers *topicWriters
+	brokers []string
+	mu sync.Mutex
+	writers map[string]*kafka.Writer
 }
 
 func NewPublisher(brokers []string) *Publisher {
-	return &Publisher{writers: newTopicWriters(brokers)}
+	return &Publisher{brokers: brokers, writers: make(map[string]*kafka.Writer)}
 }
 
 func (p *Publisher) Publish(
@@ -39,19 +41,20 @@ func (p *Publisher) Publish(
 	correlationID string,
 	payload []byte,
 ) error {
-	return p.writers.write(ctx, topic, partitionKey, eventID, correlationID, payload)
+	return p.PublishMessage(ctx, topic, newMessage(partitionKey, eventID, correlationID, payload))
 }
 
 func (p *Publisher) Move(ctx context.Context, message kafka.Message) error {
-	return moveToDeadLetter(ctx, message, p.writers.writeMessage)
+	return moveToDeadLetter(ctx, message, p.PublishMessage)
 }
 
 func (p *Publisher) PublishMessage(ctx context.Context, topic string, message kafka.Message) error {
-	return p.writers.writeMessage(ctx, topic, message)
-}
-
-func (p *Publisher) Close() error {
-	return p.writers.Close()
+	if err := p.writer(topic).WriteMessages(ctx, message); err != nil {
+		metrics.KafkaPublish(topic, "error")
+		return fmt.Errorf("write kafka message: %w", err)
+	}
+	metrics.KafkaPublish(topic, "ok")
+	return nil
 }
 
 func moveToDeadLetter(
@@ -81,39 +84,6 @@ func NewReader(brokers []string, topic string, groupID string) *kafka.Reader {
 		MinBytes: 1,
 		MaxBytes: 1e6,
 	})
-}
-
-type topicWriters struct {
-	brokers []string
-	mu sync.Mutex
-	writers map[string]*kafka.Writer
-}
-
-func newTopicWriters(brokers []string) *topicWriters {
-	return &topicWriters{
-		brokers: brokers,
-		writers: make(map[string]*kafka.Writer),
-	}
-}
-
-func (w *topicWriters) write(
-	ctx context.Context,
-	topic string,
-	partitionKey string,
-	eventID string,
-	correlationID string,
-	payload []byte,
-) error {
-	return w.writeMessage(ctx, topic, newMessage(partitionKey, eventID, correlationID, payload))
-}
-
-func (w *topicWriters) writeMessage(ctx context.Context, topic string, message kafka.Message) error {
-	if err := w.writer(topic).WriteMessages(ctx, message); err != nil {
-		metrics.KafkaPublish(topic, "error")
-		return fmt.Errorf("write kafka message: %w", err)
-	}
-	metrics.KafkaPublish(topic, "ok")
-	return nil
 }
 
 func newMessage(partitionKey string, eventID string, correlationID string, payload []byte) kafka.Message {
@@ -151,31 +121,31 @@ func cloneHeaders(headers []kafka.Header) []kafka.Header {
 	return cloned
 }
 
-func (w *topicWriters) writer(topic string) *kafka.Writer {
-	w.mu.Lock()
-	defer w.mu.Unlock()
+func (p *Publisher) writer(topic string) *kafka.Writer {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 
-	writer, ok := w.writers[topic]
+	writer, ok := p.writers[topic]
 	if ok {
 		return writer
 	}
 	writer = &kafka.Writer{
-		Addr: kafka.TCP(w.brokers...),
+		Addr: kafka.TCP(p.brokers...),
 		Topic: topic,
 		RequiredAcks: kafka.RequireAll,
 		Balancer: &kafka.Hash{},
 		BatchTimeout: 10 * time.Millisecond,
 	}
-	w.writers[topic] = writer
+	p.writers[topic] = writer
 	return writer
 }
 
-func (w *topicWriters) Close() error {
-	w.mu.Lock()
-	defer w.mu.Unlock()
+func (p *Publisher) Close() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 
 	var err error
-	for topic, writer := range w.writers {
+	for topic, writer := range p.writers {
 		if closeErr := writer.Close(); closeErr != nil {
 			err = errors.Join(err, fmt.Errorf("close kafka writer %s: %w", topic, closeErr))
 		}

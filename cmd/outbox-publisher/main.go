@@ -34,9 +34,7 @@ func main() {
 	}
 
 	broker := kafkabus.NewPublisher(appenv.CSV("KAFKA_BROKERS", []string{"redpanda:9092"}))
-	defer func() {
-		_ = broker.Close()
-	}()
+	defer broker.Close()
 	publisher := outbox.NewPublisher(
 		store,
 		func(ctx context.Context, event domain.OutboxEvent) error {

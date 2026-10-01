@@ -7,12 +7,7 @@ interface NoticeBarProps {
 
 export function NoticeBar({ notice, onDismiss }: NoticeBarProps) {
   if (!notice) {
-    return (
-      <div className="notice notice--idle" role="status">
-        <span className="notice__dot" aria-hidden="true" />
-        Set the connection, then submit a LOW or HIGH risk transaction to trace the event flow.
-      </div>
-    );
+    return null;
   }
 
   return (

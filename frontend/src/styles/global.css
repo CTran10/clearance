@@ -16,11 +16,6 @@ body {
   line-height: 1.5;
   color: var(--text);
   background-color: var(--bg-0);
-  /* Subtle control-room atmosphere: a faint emerald glow up top. */
-  background-image:
-    radial-gradient(120% 80% at 12% -10%, oklch(78% 0.155 165 / 0.08), transparent 55%),
-    radial-gradient(90% 70% at 100% 0%, oklch(80% 0.13 235 / 0.06), transparent 50%);
-  background-attachment: fixed;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
@@ -47,7 +42,6 @@ textarea {
 :focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 2px;
-  border-radius: 4px;
 }
 
 ::selection {
@@ -55,37 +49,9 @@ textarea {
   color: var(--text);
 }
 
-/* Thin, theme-aware scrollbars */
-* {
-  scrollbar-width: thin;
-  scrollbar-color: var(--line-strong) transparent;
-}
-*::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
-}
-*::-webkit-scrollbar-thumb {
-  background: var(--line-strong);
-  border: 3px solid transparent;
-  background-clip: padding-box;
-  border-radius: var(--radius-pill);
-}
-
 .mono {
   font-family: var(--font-mono);
   font-feature-settings: "ss01", "zero";
-}
-
-.visually-hidden {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  margin: -1px;
-  padding: 0;
-  overflow: hidden;
-  clip: rect(0 0 0 0);
-  white-space: nowrap;
-  border: 0;
 }
 
 .skip-link {
@@ -95,7 +61,7 @@ textarea {
   z-index: 10;
   transform: translateY(-160%);
   padding: var(--space-2) var(--space-3);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius);
   background: var(--accent);
   color: var(--accent-ink);
   font-weight: 700;
