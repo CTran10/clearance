@@ -3,6 +3,14 @@
   gap: var(--space-5);
 }
 
+.submit__kind { display: flex; gap: var(--space-4); }
+.submit__kind button { background: none; border: 0; border-bottom: 1px solid transparent; padding: var(--space-1) 0; color: var(--text-faint); font-size: var(--text-sm); }
+.submit__kind button[aria-pressed="true"] { border-bottom-color: var(--text); color: var(--text); }
+.submit__kind button:disabled { cursor: not-allowed; opacity: 0.5; }
+.submit__details { color: var(--text-faint); font-size: var(--text-sm); }
+.submit__details summary { cursor: pointer; }
+.submit__details fieldset { padding-top: var(--space-3); }
+
 /* ---- Live risk preview ---- */
 .riskpreview {
   display: flex;
@@ -59,19 +67,6 @@
   margin: 0;
   padding: 0;
   border: 0;
-}
-.submit__legend {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  width: 100%;
-  padding: 0;
-  margin-bottom: var(--space-1);
-  font-size: var(--text-xs);
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--text-muted);
 }
 .submit__grid {
   display: grid;

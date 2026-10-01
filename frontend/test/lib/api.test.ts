@@ -1,9 +1,32 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 
-import { getTransaction, parseApiError } from "../../src/lib/api.ts";
+import { ApiError, depositFunds, getTransaction, parseApiError, submitTransaction } from "../../src/lib/api.ts";
 
 afterEach(() => {
   vi.unstubAllGlobals();
+});
+
+test("preserves the HTTP error status for an expected idempotency conflict", async () => {
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: "idempotency conflict" }), { status: 409 })));
+  const request = submitTransaction({ baseUrl: "http://localhost:9000", authValue: "transaction-test",
+    idempotencyKey: "idem-test", correlationId: "trace-test",
+    payload: { account_id: "acct-test", merchant_id: "merchant-test", amount_cents: 12551, currency: "USD" },
+  });
+  await expect(request).rejects.toBeInstanceOf(ApiError);
+  await expect(request).rejects.toMatchObject({ status: 409, message: "idempotency conflict" });
+});
+
+test("funding forwards the requested amount and audit fields with its scoped bearer", async () => {
+  const fetchMock = vi.fn().mockResolvedValue(new Response("{}", { status: 201 }));
+  vi.stubGlobal("fetch", fetchMock);
+  await depositFunds({ baseUrl: "http://localhost:9000", authValue: "funding-test", accountId: "acct-funding",
+    idempotencyKey: "fund-key", correlationId: "trace-test", payload: { amount_cents: 23000, currency: "USD",
+      funding_source: "manual", external_reference: "fund-key", operator_reason: "Account funding" } });
+  expect(fetchMock).toHaveBeenCalledWith("http://localhost:9000/accounts/acct-funding/deposits", expect.objectContaining({
+    method: "POST", headers: expect.objectContaining({ Authorization: "Bearer funding-test" }),
+    body: JSON.stringify({ amount_cents: 23000, currency: "USD", funding_source: "manual",
+      external_reference: "fund-key", operator_reason: "Account funding" }),
+  }));
 });
 
 describe("parseApiError", () => {

@@ -11,18 +11,6 @@ export interface Option {
   hint?: string;
 }
 
-export const DEMO_ACCOUNTS: Option[] = [
-  { value: "acct_123", hint: "Default funded account" },
-  { value: "acct_empty", hint: "Zero balance" },
-  { value: "acct_attacker", hint: "Ownership mismatch" },
-];
-
-export const DEMO_MERCHANTS: Option[] = [
-  { value: "merchant_123", hint: "Default" },
-  { value: "merchant_grocer", hint: "Grocery" },
-  { value: "merchant_travel", hint: "Travel" },
-];
-
 export const CURRENCIES: Option[] = [
   { value: "USD" },
   { value: "EUR" },

@@ -1,12 +1,15 @@
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
-import { getTransaction, submitTransaction } from "../src/lib/api.ts";
+import { depositFunds, getTransaction, submitTransaction } from "../src/lib/api.ts";
+import type { DepositResponse } from "../src/types.ts";
 import { useConsole } from "../src/state/useConsole.ts";
 
-vi.mock("../src/lib/api.ts", () => ({
+vi.mock("../src/lib/api.ts", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../src/lib/api.ts")>(),
   getTransaction: vi.fn(),
   submitTransaction: vi.fn(),
+  depositFunds: vi.fn(),
 }));
 
 const fields = {
@@ -123,4 +126,64 @@ test("keeps only the latest twelve receipts and regenerates request keys on dema
   act(() => result.current.actions.regenerateKeys());
   expect(result.current.state.idempotencyKey).not.toBe(fields.idempotencyKey);
   expect(result.current.state.correlationId).not.toBe(fields.correlationId);
+});
+
+test("replaying creation keeps one receipt and does not regress its known final state", async () => {
+  vi.stubEnv("VITE_TRANSACTION_API_AUTH_VALUE", "local-token");
+  vi.mocked(submitTransaction).mockResolvedValue({ transaction_id: "txn-replay", status: "PENDING" });
+  vi.mocked(getTransaction).mockResolvedValue({
+    transaction_id: "txn-replay", kind: "PAYMENT", account_id: "acct_123", amount_cents: 12550,
+    currency: "USD", status: "AUTHORIZED", risk_level: "LOW", risk_reason: "amount is at or below 500.00",
+    correlation_id: "trace-test", created_at: "2026-09-30T00:00:00Z", updated_at: "2026-09-30T00:00:01Z",
+  });
+  const { result } = renderHook(() => useConsole());
+  await act(async () => { await result.current.actions.submit(fields); });
+  expect(result.current.state.receipts[0].status).toBe("AUTHORIZED");
+  await act(async () => { await result.current.actions.submit(fields); });
+  expect(result.current.state.receipts).toHaveLength(1);
+  expect(result.current.state.receipts[0]).toMatchObject({ status: "AUTHORIZED", riskLevel: "LOW" });
+  expect(getTransaction).toHaveBeenCalledOnce();
+});
+
+test.each([
+  { transaction_id: "different", kind: "PAYMENT" as const },
+  { transaction_id: "txn-status", kind: "DEPOSIT" as const },
+])("an invalid status response preserves pending state and retries on the interval (%j)", async (invalid) => {
+  vi.stubEnv("VITE_TRANSACTION_API_AUTH_VALUE", "local-token");
+  vi.mocked(submitTransaction).mockResolvedValue({ transaction_id: "txn-status", status: "PENDING" });
+  vi.mocked(getTransaction).mockResolvedValue({
+    ...invalid, account_id: "acct_123", amount_cents: 12550,
+    currency: "USD", status: "AUTHORIZED", correlation_id: "trace-test",
+    created_at: "2026-09-30T00:00:00Z", updated_at: "2026-09-30T00:00:01Z",
+  });
+  const { result } = renderHook(() => useConsole());
+  vi.useFakeTimers();
+  await act(async () => { await result.current.actions.submit(fields); });
+  expect(result.current.state.receipts[0]).toMatchObject({ status: "PENDING", statusError: "The API returned an invalid transaction status response." });
+  expect(getTransaction).toHaveBeenCalledOnce();
+  await act(() => vi.advanceTimersByTimeAsync(1_500));
+  expect(getTransaction).toHaveBeenCalledTimes(2);
+});
+
+test("an in-flight deposit blocks a concurrent payment and releases the console after completion", async () => {
+  let finish: ((value: DepositResponse) => void) | undefined;
+  vi.mocked(depositFunds).mockReturnValue(new Promise<DepositResponse>((resolve) => { finish = resolve; }));
+  const { result } = renderHook(() => useConsole());
+  act(() => result.current.actions.configureConnection({ apiBaseUrl: "http://localhost:9000", authValue: "transaction-test", fundingAuthValue: "funding-test" }));
+  let first: ReturnType<typeof result.current.actions.deposit> | undefined;
+  act(() => { first = result.current.actions.deposit({ ...fields, fundingSource: "manual", externalReference: "ref-funding", operatorReason: "Account funding" }); });
+  expect(result.current.state.submitting).toBe(true);
+  await act(async () => {
+    expect(await result.current.actions.submit(fields)).toMatchObject({ ok: false, error: { message: "A request is already in progress." } });
+  });
+  expect(submitTransaction).not.toHaveBeenCalled();
+  if (!finish || !first) throw new Error("The deferred deposit was not started.");
+  finish({ transaction_id: "dep-concurrent", deposit_id: "dep-concurrent", status: "AUTHORIZED", account_id: fields.accountId,
+    amount_cents: 12550, currency: "USD", balance_after_cents: 12550, correlation_id: fields.correlationId });
+  await act(async () => { await first; });
+  expect(result.current.state.submitting).toBe(false);
+  expect(result.current.state.receipts[0]).toMatchObject({ kind: "DEPOSIT", status: "AUTHORIZED", balanceAfterCents: 12550 });
+  vi.mocked(submitTransaction).mockResolvedValue({ transaction_id: "txn-after-deposit", status: "PENDING" });
+  await act(async () => { await result.current.actions.submit(fields); });
+  expect(submitTransaction).toHaveBeenCalledOnce();
 });

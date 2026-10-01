@@ -12,6 +12,23 @@ export interface TransactionInput {
   currency: string;
 }
 
+export interface DepositInput {
+  accountId: string;
+  amountCents: string;
+  currency: string;
+  fundingSource: string;
+  externalReference: string;
+  operatorReason: string;
+}
+
+export interface DepositPayload {
+  amount_cents: number;
+  currency: string;
+  funding_source: string;
+  external_reference: string;
+  operator_reason: string;
+}
+
 /** Exact wire shape accepted by the Go Transaction Service (DisallowUnknownFields). */
 export interface TransactionPayload {
   account_id: string;
@@ -49,19 +66,33 @@ export interface RiskPreview {
   reason: string;
 }
 
-export interface Receipt {
+interface ReceiptBase {
   transactionId: string;
   status: TransactionStatus;
   correlationId: string;
   idempotencyKey: string;
   accountId: string;
-  merchantId: string;
   amountCents: number;
   currency: string;
-  previewRisk: RiskLevel;
-  previewOutcome: string;
-  previewReason: string;
   createdAt: string;
+  statusError?: string;
+}
+
+export type Receipt = ReceiptBase & (
+  | { kind: "PAYMENT"; merchantId: string; previewRisk: RiskLevel; previewOutcome: string;
+      previewReason: string; riskLevel?: RiskLevel; riskReason?: string }
+  | { kind: "DEPOSIT"; fundingSource: string; balanceAfterCents: number; previewRisk?: never }
+);
+
+export interface DepositResponse {
+  deposit_id: string;
+  transaction_id: string;
+  status: TransactionStatus;
+  account_id: string;
+  amount_cents: number;
+  currency: string;
+  balance_after_cents: number;
+  correlation_id: string;
 }
 
 export interface ReceiptSummary {

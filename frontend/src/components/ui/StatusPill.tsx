@@ -8,7 +8,6 @@ interface StatusPillProps {
 export function StatusPill({ tone, label }: StatusPillProps) {
   return (
     <span className="pill" data-tone={tone}>
-      <span className="pill__dot" aria-hidden="true" />
       {label}
     </span>
   );

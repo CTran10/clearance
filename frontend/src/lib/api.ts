@@ -1,5 +1,12 @@
 import { buildTransactionHeaders } from "./transaction.ts";
-import type { TransactionDetail, TransactionPayload, TransactionResponse } from "../types.ts";
+import type { DepositPayload, DepositResponse, TransactionDetail, TransactionPayload, TransactionResponse } from "../types.ts";
+
+export class ApiError extends Error {
+  constructor(public readonly status: number, message: string) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
 
 export async function parseApiError(response: Response): Promise<string> {
   let body: unknown;
@@ -30,7 +37,7 @@ async function request<T>(baseUrl: string, path: string, options: RequestInit = 
     throw new Error(`Could not reach ${baseUrl}${path} (${reason}). Is the platform running?`);
   }
   if (!response.ok) {
-    throw new Error(await parseApiError(response));
+    throw new ApiError(response.status, await parseApiError(response));
   }
   return response.json() as Promise<T>;
 }
@@ -71,5 +78,22 @@ export async function getTransaction({
   return request<TransactionDetail>(baseUrl, `/transactions/${encodeURIComponent(transactionId)}`, {
     method: "GET",
     headers: { Authorization: `Bearer ${authValue}` },
+  });
+}
+
+export interface DepositArgs {
+  baseUrl: string;
+  authValue: string;
+  accountId: string;
+  idempotencyKey: string;
+  correlationId: string;
+  payload: DepositPayload;
+}
+
+export async function depositFunds(args: DepositArgs): Promise<DepositResponse> {
+  return request<DepositResponse>(args.baseUrl, `/accounts/${encodeURIComponent(args.accountId)}/deposits`, {
+    method: "POST",
+    headers: buildTransactionHeaders(args.authValue, args.idempotencyKey, args.correlationId),
+    body: JSON.stringify(args.payload),
   });
 }

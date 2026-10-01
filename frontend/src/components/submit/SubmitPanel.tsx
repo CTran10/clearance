@@ -1,8 +1,10 @@
 import { useState } from "react";
 import type { FormEvent } from "react";
 
-import { CURRENCIES, DEMO_ACCOUNTS, DEMO_MERCHANTS, RISK_THRESHOLD_CENTS } from "../../lib/constants.ts";
-import type { SubmitFields } from "../../state/useConsole.ts";
+import { CURRENCIES } from "../../lib/constants.ts";
+import { createSafeId } from "../../lib/ids.ts";
+import { formatAmountCents } from "../../lib/format.ts";
+import type { DepositFields, SubmissionResult, SubmitFields } from "../../state/useConsole.ts";
 import { Button } from "../ui/Button.tsx";
 import { Panel } from "../ui/Panel.tsx";
 import { SelectField, TextField } from "../ui/Field.tsx";
@@ -13,7 +15,8 @@ interface SubmitPanelProps {
   idempotencyKey: string;
   correlationId: string;
   submitting: boolean;
-  onSubmit: (fields: SubmitFields) => Promise<void>;
+  onSubmit: (fields: SubmitFields) => Promise<SubmissionResult>;
+  onDeposit: (fields: DepositFields) => Promise<SubmissionResult>;
   onRegenerateKeys: () => void;
 }
 
@@ -24,42 +27,73 @@ export function SubmitPanel({
   correlationId,
   submitting,
   onSubmit,
+  onDeposit,
   onRegenerateKeys,
 }: SubmitPanelProps) {
   const [amount, setAmount] = useState(DEFAULT_AMOUNT);
   const [currency, setCurrency] = useState("USD");
+  const [kind, setKind] = useState<"PAYMENT" | "DEPOSIT">("PAYMENT");
+  const [accountId, setAccountId] = useState(() => createSafeId("acct"));
+  const [externalReference, setExternalReference] = useState(() => createSafeId("ref"));
+  const [merchantId, setMerchantId] = useState("merchant_123");
+  const [fundingSource, setFundingSource] = useState("manual");
+  const [operatorReason, setOperatorReason] = useState("Account funding");
+
+  function newRequest() {
+    onRegenerateKeys();
+    setExternalReference(createSafeId("ref"));
+  }
+
+  function chooseKind(next: typeof kind) {
+    if (next !== kind) {
+      setKind(next);
+      newRequest();
+    }
+  }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
-    await onSubmit({
-      accountId: String(form.get("accountId") ?? ""),
-      merchantId: String(form.get("merchantId") ?? ""),
-      amountCents: amount,
-      currency: String(form.get("currency") ?? ""),
+    const common = { accountId, amountCents: amount, currency,
       idempotencyKey: String(form.get("idempotencyKey") ?? ""),
       correlationId: String(form.get("correlationId") ?? ""),
-    });
+    };
+    if (kind === "PAYMENT") {
+      await onSubmit({ ...common, merchantId });
+    } else {
+      await onDeposit({ ...common, fundingSource,
+        externalReference: String(form.get("externalReference") ?? ""),
+        operatorReason,
+      });
+    }
   }
 
   return (
     <Panel
-      title="Submit transaction"
-      actions={<span className="panel__meta">POST /transactions</span>}
+      title="Transaction"
+      actions={<button type="button" className="link-button" disabled={submitting} onClick={newRequest}>New request</button>}
     >
       <form className="submit" onSubmit={handleSubmit}>
-        <RiskPreview amountCents={amount} currency={currency} />
+        <div className="submit__kind" role="group" aria-label="Request type">
+          <button type="button" aria-pressed={kind === "PAYMENT"} disabled={submitting} onClick={() => chooseKind("PAYMENT")}>Payment</button>
+          <button type="button" aria-pressed={kind === "DEPOSIT"} disabled={submitting} onClick={() => chooseKind("DEPOSIT")}>Deposit</button>
+        </div>
+        {kind === "PAYMENT" ? <RiskPreview amountCents={amount} currency={currency} /> :
+          <div className="riskpreview">
+            <div className="riskpreview__main">
+              <span className="riskpreview__eyebrow">Deposit</span>
+              <div className="riskpreview__amount mono">{formatAmountCents(Number(amount) || 0, currency)}</div>
+            </div>
+          </div>}
 
-        <fieldset className="submit__group">
-          <legend className="submit__legend">Request body</legend>
+        <fieldset className="submit__group" disabled={submitting}>
           <div className="submit__grid">
-            <SelectField label="Account" name="accountId" options={DEMO_ACCOUNTS} defaultValue="acct_123" />
-            <SelectField
-              label="Merchant"
-              name="merchantId"
-              options={DEMO_MERCHANTS}
-              defaultValue="merchant_123"
-            />
+            <TextField label="Account" name="accountId" value={accountId} required maxLength={128} mono
+              onChange={(event) => setAccountId(event.target.value)}
+              aside={<button type="button" className="link-button" onClick={() => { setAccountId(createSafeId("acct")); newRequest(); }}>Generate ID</button>} />
+            {kind === "PAYMENT" ?
+              <TextField label="Merchant" name="merchantId" value={merchantId} onChange={(event) => setMerchantId(event.target.value)} required maxLength={128} mono /> :
+              <TextField label="Funding source" name="fundingSource" value={fundingSource} onChange={(event) => setFundingSource(event.target.value)} required maxLength={128} mono />}
             <TextField
               label="Amount (cents)"
               name="amountCents"
@@ -70,12 +104,7 @@ export function SubmitPanel({
               value={amount}
               onChange={(event) => setAmount(event.target.value)}
               mono
-              aria-describedby="amount-hint"
-              aside={
-                <small id="amount-hint" className="field__hint">
-                  HIGH risk above {RISK_THRESHOLD_CENTS}
-                </small>
-              }
+              required
             />
             <SelectField
               label="Currency"
@@ -85,36 +114,35 @@ export function SubmitPanel({
               onChange={(event) => setCurrency(event.target.value)}
             />
           </div>
+          {kind === "DEPOSIT" && <TextField label="Operator reason" name="operatorReason" value={operatorReason} onChange={(event) => setOperatorReason(event.target.value)} required maxLength={256} />}
         </fieldset>
 
-        <fieldset className="submit__group">
-          <legend className="submit__legend">
-            Request headers
-            <button type="button" className="link-button" onClick={onRegenerateKeys}>
-              Regenerate
-            </button>
-          </legend>
-          <TextField
-            key={idempotencyKey}
-            label="Idempotency-Key"
-            name="idempotencyKey"
-            defaultValue={idempotencyKey}
-            mono
-            spellCheck={false}
-          />
-          <TextField
-            key={correlationId}
-            label="X-Correlation-ID"
-            name="correlationId"
-            defaultValue={correlationId}
-            mono
-            spellCheck={false}
-          />
-        </fieldset>
+        <details className="submit__details">
+          <summary>Request details</summary>
+          <fieldset className="submit__group" disabled={submitting}>
+            <TextField
+              key={idempotencyKey}
+              label="Idempotency-Key"
+              name="idempotencyKey"
+              defaultValue={idempotencyKey}
+              mono
+              spellCheck={false}
+            />
+            <TextField
+              key={correlationId}
+              label="X-Correlation-ID"
+              name="correlationId"
+              defaultValue={correlationId}
+              mono
+              spellCheck={false}
+            />
+            {kind === "DEPOSIT" && <TextField key={externalReference} label="External reference" name="externalReference" defaultValue={externalReference} mono />}
+          </fieldset>
+        </details>
 
         <div className="submit__actions">
           <Button type="submit" loading={submitting} block>
-            {submitting ? "Submitting…" : "Submit transaction"}
+            {submitting ? "Submitting…" : kind === "PAYMENT" ? "Submit payment" : "Deposit funds"}
           </Button>
         </div>
       </form>

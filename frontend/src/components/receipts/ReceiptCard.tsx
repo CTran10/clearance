@@ -21,12 +21,15 @@ export function ReceiptCard({ receipt }: ReceiptCardProps) {
     <article className="receipt">
       <header className="receipt__head">
         <div className="receipt__id">
-          <span className="receipt__idlabel">Transaction</span>
+          <span className="receipt__idlabel">{receipt.kind === "DEPOSIT" ? "Deposit" : "Payment"}</span>
           <span className="receipt__idvalue mono">{receipt.transactionId || "pending"}</span>
         </div>
         <div className="receipt__pills">
           <StatusPill tone={statusTone(receipt.status)} label={receipt.status} />
-          <StatusPill tone={riskTone(receipt.previewRisk)} label={`${receipt.previewRisk} risk`} />
+          {receipt.kind === "PAYMENT" && <StatusPill
+            tone={riskTone(receipt.riskLevel ?? receipt.previewRisk)}
+            label={`${receipt.riskLevel ?? receipt.previewRisk} ${receipt.riskLevel ? "risk" : "risk preview"}`}
+          />}
         </div>
       </header>
 
@@ -34,13 +37,18 @@ export function ReceiptCard({ receipt }: ReceiptCardProps) {
 
       <dl className="receipt__grid">
         <Detail term="Account" value={receipt.accountId} mono />
-        <Detail term="Merchant" value={receipt.merchantId} mono />
+        {receipt.kind === "PAYMENT" ? <Detail term="Merchant" value={receipt.merchantId} mono /> :
+          <Detail term="Balance after" value={formatAmountCents(receipt.balanceAfterCents, receipt.currency)} mono />}
         <Detail term="Idempotency" value={receipt.idempotencyKey} mono />
         <Detail term="Correlation" value={receipt.correlationId} mono />
       </dl>
 
       <footer className="receipt__foot">
-        <span className="receipt__reason">{receipt.previewOutcome} — {receipt.previewReason}</span>
+        <span className="receipt__reason">
+          {receipt.kind === "DEPOSIT" ? `Funding source: ${receipt.fundingSource}` :
+            receipt.riskReason ? `Backend: ${receipt.riskReason}` : `Risk preview: ${receipt.previewReason}`}
+          {receipt.statusError && ` · Status read: ${receipt.statusError}`}
+        </span>
         <time dateTime={receipt.createdAt} title={formatDateTime(receipt.createdAt)}>
           {formatRelativeTime(receipt.createdAt)}
         </time>

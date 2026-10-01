@@ -16,6 +16,11 @@ describe("summarizeReceipts", () => {
   test("returns a zeroed summary for an empty list", () => {
     expect(summarizeReceipts([])).toEqual({ total: 0, pending: 0, lowRisk: 0, highRisk: 0 });
   });
+
+  test("funding receipts count toward totals without being scored as LOW risk", () => {
+    expect(summarizeReceipts([{ status: "AUTHORIZED" }, { status: "AUTHORIZED", previewRisk: "LOW" }]))
+      .toEqual({ total: 2, pending: 0, lowRisk: 1, highRisk: 0 });
+  });
 });
 
 describe("tone mapping", () => {
